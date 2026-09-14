@@ -30,6 +30,7 @@ type GeneralConfig struct {
 	SilenceThreshold float64 `toml:"silence_threshold" yap:"min=0.0;max=1.0;doc=Amplitude threshold (0..1)"`
 	SilenceDuration  float64 `toml:"silence_duration"  yap:"gt=0;doc=Seconds of silence before auto-stop"`
 	History          bool    `toml:"history"           yap:"doc=Append every transcription to history.jsonl"`
+	LogTranscripts   bool    `toml:"log_transcripts"   yap:"doc=Log the text going into and out of the transform stage. Off by default because a transcript is dictation and the log is usually readable by more than its author"`
 	StreamPartials   bool    `toml:"stream_partials"   yap:"doc=Inject partials into partial-safe targets while speaking"`
 }
 
@@ -148,6 +149,7 @@ func DefaultConfig() Config {
 			SilenceThreshold: 0.02,
 			SilenceDuration:  2.0,
 			History:          false,
+			LogTranscripts:   false,
 			StreamPartials:   true,
 		},
 		Transcription: TranscriptionConfig{
