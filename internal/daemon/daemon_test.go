@@ -210,6 +210,51 @@ var _ platform.Notifier = (*countingNotifier)(nil)
 // with transform.enabled = false yields the passthrough backend
 // regardless of the configured Backend field, and no wrapping takes
 // place.
+func TestVADSupersedesTrimmer(t *testing.T) {
+	cases := []struct {
+		name    string
+		backend string
+		vad     bool
+		want    bool
+	}{
+		{name: "whisperlocal with vad", backend: "whisperlocal", vad: true, want: true},
+		{name: "whisperlocal without vad", backend: "whisperlocal", vad: false, want: false},
+		{name: "remote backend ignores vad", backend: "groq", vad: true, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := vadSupersedesTrimmer(pcfg.TranscriptionConfig{
+				Backend: tc.backend,
+				VAD:     tc.vad,
+			})
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAudioConfigFor_VADDropsTrimmer asserts the trimmer is switched off
+// under VAD whatever the user configured, and left alone otherwise.
+func TestAudioConfigFor_VADDropsTrimmer(t *testing.T) {
+	cfg := pcfg.DefaultConfig()
+	cfg.Audio.TrimSilence = true
+	cfg.Transcription.Backend = "whisperlocal"
+
+	cfg.Transcription.VAD = true
+	if got := audioConfigFor(&cfg); got.TrimSilence {
+		t.Error("trim_silence must be off when VAD supersedes it")
+	}
+	if !cfg.Audio.TrimSilence {
+		t.Error("the configured value must be left untouched; only behaviour is overridden")
+	}
+
+	cfg.Transcription.VAD = false
+	if got := audioConfigFor(&cfg); !got.TrimSilence {
+		t.Error("trim_silence must be honoured when VAD is off")
+	}
+}
+
 func TestNewTransformer_PassthroughWhenDisabled(t *testing.T) {
 	tc := pcfg.TransformConfig{
 		Enabled: false,
