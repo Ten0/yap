@@ -253,6 +253,14 @@ func newBackendCommon(cfg transcribe.Config, serverPath, modelPath string, spawn
 	}
 }
 
+// ResolvedModel reports the model file this backend resolved at
+// construction — the file whisper-server actually loads. It diverges
+// from transcribe.Config.Model whenever ModelPath is set, since that
+// escape hatch wins outright over the model name (see the discovery
+// order in the package doc), so callers reporting the running model to
+// an operator must prefer this over the configured name.
+func (b *Backend) ResolvedModel() string { return b.modelPath }
+
 // resolveThreadCount maps the user-facing threads knob (0 = auto) to an
 // explicit positive integer suitable for whisper-server's --threads
 // flag. It is the single source of truth for the auto-count policy:
