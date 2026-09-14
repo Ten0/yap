@@ -100,6 +100,8 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 		WhisperServerPath: tc.WhisperServerPath,
 		WhisperThreads:    tc.WhisperThreads,
 		WhisperUseGPU:     tc.WhisperUseGPU,
+		VAD:               tc.VAD,
+		VADModelPath:      tc.VADModelPath,
 		Timeout:           pcfg.DefaultTimeout,
 	})
 }
@@ -310,9 +312,40 @@ func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptio
 	return out
 }
 
+// vadSupersedesTrimmer reports whether whisper.cpp's voice activity
+// detection is doing the job audioprep's silence trimmer was written
+// for. The trimmer compares a windowed RMS against a fixed threshold,
+// which cannot tell a quiet microphone from an empty room: when the
+// whole recording falls below it, whisper is handed a stub of dead air
+// to hallucinate over. VAD decides what is speech from the audio
+// itself, so running the trimmer alongside it only adds a way to be
+// misconfigured.
+//
+// general.silence_detection is deliberately left alone. It ends the
+// recording rather than filtering its contents -- something VAD does
+// not do -- and it is what makes mode = "toggle" hands-free.
+//
+// Scoped to whisperlocal because that is the only backend that runs
+// VAD; a remote backend still needs the trimmer.
+func vadSupersedesTrimmer(tc pcfg.TranscriptionConfig) bool {
+	return tc.Backend == "whisperlocal" && tc.VAD
+}
+
 // NewAudioPreprocessor bridges pcfg.AudioConfig into the runtime
 // audioprep.Processor. Returns nil when both preprocessing features
 // are disabled — the engine treats nil as "skip preprocessing".
+// audioConfigFor returns the audio preprocessing settings to run with,
+// dropping the silence trimmer when VAD supersedes it. The configured
+// value is left untouched: only the behaviour is overridden, so `yap
+// config get audio.trim_silence` still reports what the user wrote.
+func audioConfigFor(cfg *pcfg.Config) pcfg.AudioConfig {
+	ac := cfg.Audio
+	if vadSupersedesTrimmer(cfg.Transcription) {
+		ac.TrimSilence = false
+	}
+	return ac
+}
+
 func NewAudioPreprocessor(ac pcfg.AudioConfig) engine.AudioProcessor {
 	proc := audioprep.New(audioprep.Options{
 		HighPassFilter: ac.HighPassFilter,
@@ -530,7 +563,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	eng, err := engine.New(
 		rec,
 		deps.Platform.Chime,
-		NewAudioPreprocessor(cfg.Audio),
+		NewAudioPreprocessor(audioConfigFor(cfg)),
 		transcriber,
 		transformer,
 		injector,

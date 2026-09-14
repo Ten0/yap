@@ -31,7 +31,13 @@ func newPlatformBackend(cfg transcribe.Config) (*Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newBackendCommon(cfg, serverPath, modelPath, spawnWhisperServer), nil
+	vadModelPath, err := resolveVADModel(cfg)
+	if err != nil {
+		return nil, err
+	}
+	b := newBackendCommon(cfg, serverPath, modelPath, spawnWhisperServer)
+	b.vadModelPath = vadModelPath
+	return b, nil
 }
 
 // spawnWhisperServer starts a real whisper-server child process bound
@@ -101,6 +107,12 @@ func spawnWhisperServerOnce(ctx context.Context, b *Backend) (*serverProc, error
 	}
 	if b.language != "" {
 		args = append(args, "--language", b.language)
+	}
+	// Without VAD, whisper decodes silence into whatever phrase it
+	// finds likeliest, so a recording that caught nothing still
+	// injects text.
+	if b.vadModelPath != "" {
+		args = append(args, "--vad", "--vad-model", b.vadModelPath)
 	}
 
 	// We deliberately use context.Background here rather than the

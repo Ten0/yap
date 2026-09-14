@@ -168,6 +168,16 @@ in {
           default = true;
           description = "use GPU backend for whisper.cpp when available (whisperlocal only)";
         };
+        vad = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Gate transcription on whisper.cpp voice activity detection, so silence and room noise transcribe as nothing instead of a hallucinated phrase (whisperlocal only)";
+        };
+        vad_model_path = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Explicit Silero VAD model path (whisperlocal only); empty resolves the pinned model from the cache, downloading it when absent";
+        };
         language = lib.mkOption {
           type = lib.types.str;
           default = "en";

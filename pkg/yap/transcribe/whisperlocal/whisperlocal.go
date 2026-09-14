@@ -125,7 +125,10 @@ type Backend struct {
 	cfg        transcribe.Config
 	serverPath string
 	modelPath  string
-	language   string
+	// vadModelPath is the Silero model forwarded to whisper-server via
+	// --vad-model. Empty means VAD is off for this backend.
+	vadModelPath string
+	language     string
 	// threads is the explicit whisper.cpp thread count forwarded to
 	// whisper-server via --threads. Zero means the backend computes
 	// a sane auto-count at spawn time (see resolveThreadCount).

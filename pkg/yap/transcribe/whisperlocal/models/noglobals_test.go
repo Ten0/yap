@@ -20,6 +20,7 @@ import (
 // Reload calls).
 var allowedGlobals = map[string]struct{}{
 	"known":          {}, // pinned manifest list (init-only)
+	"knownVAD":       {}, // pinned VAD manifest list (init-only)
 	"defaultManager": {}, // lazily-built production singleton
 	"defaultOnce":    {}, // sync.Once guard for defaultManager
 	"cacheDirMu":     {}, // serializes CacheDir against adrg/xdg races

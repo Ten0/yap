@@ -17,6 +17,8 @@
   whisper_server_path = ""
   whisper_threads = 0
   whisper_use_gpu = true
+  vad = true
+  vad_model_path = ""
   language = "en"
   api_url = ""
   api_key = ""

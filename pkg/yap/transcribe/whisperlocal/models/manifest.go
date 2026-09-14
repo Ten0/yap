@@ -107,6 +107,29 @@ var known = []Manifest{
 // Manager constructor uses it so per-process Manager instances do not
 // share the underlying slice with each other or with the package
 // global.
+// DefaultVADModel is the pinned Silero model whisper.cpp uses for
+// voice activity detection.
+const DefaultVADModel = "silero-v5.1.2"
+
+// knownVAD is the pinned VAD manifest. It is deliberately separate
+// from known so a VAD model can never be selected as
+// transcription.model, nor listed as one by `yap models list`.
+var knownVAD = []Manifest{
+	{
+		Name:   DefaultVADModel,
+		URL:    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+		SHA256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+		SizeMB: 1,
+	},
+}
+
+// KnownVAD returns a copy of the pinned VAD manifest.
+func KnownVAD() []Manifest {
+	out := make([]Manifest, len(knownVAD))
+	copy(out, knownVAD)
+	return out
+}
+
 func knownCopy() []Manifest {
 	out := make([]Manifest, len(known))
 	copy(out, known)

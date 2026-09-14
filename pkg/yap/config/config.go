@@ -43,6 +43,8 @@ type TranscriptionConfig struct {
 	WhisperServerPath string `toml:"whisper_server_path" yap:"doc=Path to the whisper-server binary (whisperlocal only); empty resolves via $YAP_WHISPER_SERVER, $PATH, then a Nix profile fallback"`
 	WhisperThreads    int    `toml:"whisper_threads"     yap:"min=0;max=64;doc=whisper.cpp thread count (whisperlocal only); 0 picks runtime.NumCPU()/2 rounded up to at least 1"`
 	WhisperUseGPU     bool   `toml:"whisper_use_gpu"     yap:"doc=use GPU backend for whisper.cpp when available (whisperlocal only)"`
+	VAD               bool   `toml:"vad"                 yap:"doc=Gate transcription on whisper.cpp voice activity detection, so silence and room noise transcribe as nothing instead of a hallucinated phrase (whisperlocal only)"`
+	VADModelPath      string `toml:"vad_model_path"      yap:"doc=Explicit Silero VAD model path (whisperlocal only); empty resolves the pinned model from the cache, downloading it when absent"`
 	Language          string `toml:"language"            yap:"doc=ISO language code; empty auto-detects"`
 	APIURL            string `toml:"api_url"             yap:"doc=Remote endpoint URL; required when backend is remote"`
 	APIKey            string `toml:"api_key"             yap:"secret;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
@@ -158,6 +160,8 @@ func DefaultConfig() Config {
 			WhisperServerPath: "",
 			WhisperThreads:    0,
 			WhisperUseGPU:     true,
+			VAD:               true,
+			VADModelPath:      "",
 			Language:          "en",
 			APIURL:            "",
 			APIKey:            "",
