@@ -135,6 +135,7 @@ model = ""
 system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
 api_url = ""
 api_key = ""                    # or env: YAP_TRANSFORM_API_KEY
+startup_health_check = true     # probe the backend once at startup
 
 [injection]
 prefer_osc52 = true             # OSC52 for terminals when supported

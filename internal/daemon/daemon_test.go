@@ -258,11 +258,12 @@ func TestNewTransformerWithFallback_HealthCheckSuccess_Wraps(t *testing.T) {
 	defer srv.Close()
 
 	tc := pcfg.TransformConfig{
-		Enabled: true,
-		Backend: "openai",
-		APIURL:  srv.URL + "/v1",
-		Model:   "gpt-4o-mini",
-		APIKey:  "sk-test",
+		Enabled:            true,
+		Backend:            "openai",
+		APIURL:             srv.URL + "/v1",
+		Model:              "gpt-4o-mini",
+		APIKey:             "sk-test",
+		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
 	tr, err := NewTransformerWithFallback(tc, notifier, false)
@@ -287,10 +288,11 @@ func TestNewTransformerWithFallback_HealthCheckFailure_Notifies(t *testing.T) {
 	defer srv.Close()
 
 	tc := pcfg.TransformConfig{
-		Enabled: true,
-		Backend: "local",
-		APIURL:  srv.URL,
-		Model:   "llama3",
+		Enabled:            true,
+		Backend:            "local",
+		APIURL:             srv.URL,
+		Model:              "llama3",
+		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
 	tr, err := NewTransformerWithFallback(tc, notifier, false)
@@ -349,11 +351,12 @@ func TestNewTransformerWithFallback_StreamPartials_NoFallbackWrapping(t *testing
 	defer srv.Close()
 
 	tc := pcfg.TransformConfig{
-		Enabled: true,
-		Backend: "openai",
-		APIURL:  srv.URL + "/v1",
-		Model:   "gpt-4o-mini",
-		APIKey:  "sk-test",
+		Enabled:            true,
+		Backend:            "openai",
+		APIURL:             srv.URL + "/v1",
+		Model:              "gpt-4o-mini",
+		APIKey:             "sk-test",
+		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
 	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
@@ -379,10 +382,11 @@ func TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPass
 	defer srv.Close()
 
 	tc := pcfg.TransformConfig{
-		Enabled: true,
-		Backend: "local",
-		APIURL:  srv.URL,
-		Model:   "llama3",
+		Enabled:            true,
+		Backend:            "local",
+		APIURL:             srv.URL,
+		Model:              "llama3",
+		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
 	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
@@ -410,6 +414,42 @@ func TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPass
 	}
 	if len(got) != 1 || got[0].Text != "hi" {
 		t.Errorf("got = %+v, want passthrough echo", got)
+	}
+}
+
+// TestNewTransformerWithFallback_StartupHealthCheckDisabled_NoProbe
+// asserts that an unreachable backend is kept, and nothing reported,
+// when the startup probe is turned off. The backend is only exercised
+// by real dictation from then on, where the fallback decorator reports
+// each degradation.
+func TestNewTransformerWithFallback_StartupHealthCheckDisabled_NoProbe(t *testing.T) {
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	tc := pcfg.TransformConfig{
+		Enabled:            true,
+		Backend:            "local",
+		APIURL:             srv.URL,
+		Model:              "llama3",
+		StartupHealthCheck: false,
+	}
+	notifier := &countingNotifier{}
+	tr, err := NewTransformerWithFallback(tc, notifier, false)
+	if err != nil {
+		t.Fatalf("NewTransformerWithFallback: %v", err)
+	}
+	if _, isFallback := tr.(*fallback.Transformer); !isFallback {
+		t.Errorf("transformer type = %T, want *fallback.Transformer", tr)
+	}
+	if got := atomic.LoadInt32(&probes); got != 0 {
+		t.Errorf("probe requests = %d, want 0 when the startup probe is disabled", got)
+	}
+	if got := atomic.LoadInt32(&notifier.calls); got != 0 {
+		t.Errorf("notifier calls = %d, want 0 when the startup probe is disabled", got)
 	}
 }
 

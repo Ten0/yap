@@ -67,12 +67,13 @@ func (t TranscriptionConfig) ResolvedAPIURL() string {
 // sits between transcription and injection. Phase 8 adds the concrete
 // backends; Phase 2 only owns the schema.
 type TransformConfig struct {
-	Enabled      bool   `toml:"enabled"       yap:"doc=Route transcription through a transform backend before injection"`
-	Backend      string `toml:"backend"       yap:"enum=passthrough,local,openai;doc=Transform backend"`
-	Model        string `toml:"model"         yap:"doc=Model name; required when enabled and backend is not passthrough"`
-	SystemPrompt string `toml:"system_prompt" yap:"doc=System prompt for the transform backend"`
-	APIURL       string `toml:"api_url"       yap:"doc=Transform endpoint; local backends default to http://localhost:11434/v1"`
-	APIKey       string `toml:"api_key"       yap:"secret;doc=API key; env: YAP_TRANSFORM_API_KEY"`
+	Enabled            bool   `toml:"enabled"       yap:"doc=Route transcription through a transform backend before injection"`
+	Backend            string `toml:"backend"       yap:"enum=passthrough,local,openai;doc=Transform backend"`
+	Model              string `toml:"model"         yap:"doc=Model name; required when enabled and backend is not passthrough"`
+	SystemPrompt       string `toml:"system_prompt" yap:"doc=System prompt for the transform backend"`
+	APIURL             string `toml:"api_url"       yap:"doc=Transform endpoint; local backends default to http://localhost:11434/v1"`
+	APIKey             string `toml:"api_key"       yap:"secret;doc=API key; env: YAP_TRANSFORM_API_KEY"`
+	StartupHealthCheck bool   `toml:"startup_health_check" yap:"doc=Probe the backend once at startup, falling back to passthrough for the session when it fails. Disable for endpoints that serve chat completions but no usable probe endpoint, or so a backend that is unavailable only at that moment does not silently downgrade every later transform"`
 }
 
 // InjectionConfig configures how transcribed text is delivered to the
@@ -162,12 +163,13 @@ func DefaultConfig() Config {
 			APIKey:            "",
 		},
 		Transform: TransformConfig{
-			Enabled:      false,
-			Backend:      "passthrough",
-			Model:        "",
-			SystemPrompt: "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text.",
-			APIURL:       "",
-			APIKey:       "",
+			Enabled:            false,
+			Backend:            "passthrough",
+			Model:              "",
+			SystemPrompt:       "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text.",
+			APIURL:             "",
+			APIKey:             "",
+			StartupHealthCheck: true,
 		},
 		Injection: InjectionConfig{
 			PreferOSC52:      true,
