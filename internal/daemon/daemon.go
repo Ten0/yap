@@ -175,8 +175,9 @@ func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 // CLI's debug `yap transform` command, which intentionally passes a
 // nil notifier to see real errors.
 //
-// When wrapping is active, a startup health check runs synchronously
-// via the backend's optional transform.Checker interface. On health
+// When wrapping is active and transform.startup_health_check is set,
+// a startup health check runs synchronously via the backend's optional
+// transform.Checker interface. On health
 // failure the notifier receives one user-visible message and the
 // returned transformer is the passthrough — no network round-trip
 // per recording for the duration of this session.
@@ -218,7 +219,7 @@ func NewTransformerWithFallback(
 	// backend surfaces a notification and swaps to passthrough at
 	// startup time.
 	if streamPartials {
-		if checker, ok := primary.(transform.Checker); ok {
+		if checker, ok := primary.(transform.Checker); ok && tc.StartupHealthCheck {
 			checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := checker.HealthCheck(checkCtx)
 			cancel()
@@ -238,7 +239,7 @@ func NewTransformerWithFallback(
 	// notification and swaps the primary out for passthrough for the
 	// rest of the session. This matches the graceful-degradation
 	// ethos documented on ROADMAP Phase 8.
-	if checker, ok := primary.(transform.Checker); ok {
+	if checker, ok := primary.(transform.Checker); ok && tc.StartupHealthCheck {
 		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := checker.HealthCheck(checkCtx)
 		cancel()

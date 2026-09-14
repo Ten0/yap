@@ -28,6 +28,7 @@
   system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
   api_url = ""
   api_key = ""
+  startup_health_check = true
 
 [injection]
   prefer_osc52 = true

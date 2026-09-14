@@ -221,6 +221,11 @@ in {
           default = "";
           description = "API key; env: YAP_TRANSFORM_API_KEY";
         };
+        startup_health_check = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Probe the backend once at startup, falling back to passthrough for the session when it fails. Disable for endpoints that serve chat completions but no usable probe endpoint, or so a backend that is unavailable only at that moment does not silently downgrade every later transform";
+        };
       };
       injection = {
         prefer_osc52 = lib.mkOption {
