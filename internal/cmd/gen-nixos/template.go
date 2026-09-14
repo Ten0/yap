@@ -61,6 +61,9 @@ const commonOptionsTmpl = `    daemon.enable = lib.mkOption {
 // (home-manager) indentation; the NixOS template re-indents it by two
 // extra spaces via `nestedSystemdUserServiceBodyNixOS` below.
 //
+// Both embedding templates must bind `configFile` in their `let` block:
+// the fragment references it to declare the restart trigger.
+//
 // The fragment starts with a newline so every unit attribute line
 // (including the first) is subject to the re-indentation rewrite in
 // `nestedSystemdUserServiceBodyNixOS`.
@@ -68,6 +71,7 @@ const systemdUserServiceBodyTmpl = `
       Unit = {
         Description = "yap hold-to-talk voice dictation daemon";
         After = [ "pipewire.service" ];
+        X-Restart-Triggers = [ configFile ];
       };
       Service = {
         ExecStart = "${lib.getExe wrappedPkg} listen --foreground";
@@ -262,6 +266,8 @@ let
   cfg = config.programs.yap;
 
 ` + runtimeHelperTmpl + `
+
+  configFile = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
 in {
   options.programs.yap = {
     enable = lib.mkEnableOption "yap";
@@ -281,7 +287,7 @@ in {
     home.packages = [ wrappedPkg ];
 
     xdg.configFile."yap/config.toml" = {
-      source = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
+      source = configFile;
     };
 
     systemd.user.services.yap = lib.mkIf cfg.daemon.enable {` + systemdUserServiceBodyTmpl + `

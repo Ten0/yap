@@ -53,6 +53,8 @@ let
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}
     '';
   };
+
+  configFile = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
 in {
   options.programs.yap = {
     enable = lib.mkEnableOption "yap";
@@ -331,13 +333,14 @@ in {
     home.packages = [ wrappedPkg ];
 
     xdg.configFile."yap/config.toml" = {
-      source = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
+      source = configFile;
     };
 
     systemd.user.services.yap = lib.mkIf cfg.daemon.enable {
       Unit = {
         Description = "yap hold-to-talk voice dictation daemon";
         After = [ "pipewire.service" ];
+        X-Restart-Triggers = [ configFile ];
       };
       Service = {
         ExecStart = "${lib.getExe wrappedPkg} listen --foreground";
