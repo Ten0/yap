@@ -1,10 +1,14 @@
 package whisperlocal
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal/models"
@@ -106,6 +110,58 @@ func (d discoverer) checkExecutable(path string) error {
 		return errors.New("not a regular file")
 	}
 	return nil
+}
+
+// vadDownloadTimeout bounds the one-off fetch of the pinned VAD model.
+const vadDownloadTimeout = 5 * time.Minute
+
+// resolveVADModel returns the Silero VAD model path to hand
+// whisper-server, or "" when VAD is off or the model cannot be made
+// available.
+//
+// An explicitly configured transcription.vad_model_path that does not
+// resolve is a hard error: the user named a specific file and silently
+// ignoring it would hide a typo. Failing to fetch the pinned model is
+// not -- an offline machine should still dictate -- so that warns and
+// returns "", leaving whisper-server to run without VAD.
+func resolveVADModel(cfg transcribe.Config) (string, error) {
+	if !cfg.VAD {
+		return "", nil
+	}
+
+	if cfg.VADModelPath != "" {
+		info, err := os.Stat(cfg.VADModelPath)
+		if err != nil {
+			return "", fmt.Errorf("whisperlocal: transcription.vad_model_path %q: %w",
+				cfg.VADModelPath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("whisperlocal: transcription.vad_model_path %q is a directory",
+				cfg.VADModelPath)
+		}
+		if err := models.VerifyGGMLMagic(cfg.VADModelPath); err != nil {
+			return "", fmt.Errorf("whisperlocal: %w", err)
+		}
+		return cfg.VADModelPath, nil
+	}
+
+	mgr := models.NewVADManager()
+	p, err := mgr.Path(models.DefaultVADModel)
+	if err != nil {
+		slog.Default().Warn("whisperlocal: VAD model path unresolved, continuing without VAD", "error", err)
+		return "", nil
+	}
+	if installed, ierr := mgr.Installed(models.DefaultVADModel); ierr == nil && installed {
+		return p, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), vadDownloadTimeout)
+	defer cancel()
+	if derr := mgr.Download(ctx, models.DefaultVADModel, io.Discard); derr != nil {
+		slog.Default().Warn("whisperlocal: VAD model download failed, continuing without VAD", "error", derr)
+		return "", nil
+	}
+	return p, nil
 }
 
 // resolveModel returns the absolute path to the ggml-*.bin file the

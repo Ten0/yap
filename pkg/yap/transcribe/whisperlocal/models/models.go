@@ -471,6 +471,12 @@ func verifyFileSHA256(path, expected string) error {
 // Path is the package-level wrapper for Manager.Path that delegates
 // to the production singleton. Existing call sites in the CLI and
 // the discover layer continue to work unchanged.
+// NewVADManager returns a Manager scoped to the pinned VAD manifest,
+// reusing the same download, SHA256 verification and cache locking as
+// transcription models. It is a constructor rather than a singleton
+// because VAD resolution happens once per backend construction.
+func NewVADManager() *Manager { return NewManager(WithManifest(KnownVAD())) }
+
 func Path(name string) (string, error) { return Default().Path(name) }
 
 // Installed is the package-level wrapper for Manager.Installed.

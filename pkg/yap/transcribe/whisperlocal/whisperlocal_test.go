@@ -821,6 +821,84 @@ func TestResolveThreadCount(t *testing.T) {
 // and useGPU=false asserting --no-gpu is present. In both cases the
 // test additionally asserts --use-gpu is NEVER in argv, guarding
 // against a regression back to the broken flag name.
+func TestSpawnArgs_VAD(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skipf("no /bin/sh available: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		vad        bool
+		withModel  bool
+		wantVADArg bool
+	}{
+		{name: "vad on with an explicit model", vad: true, withModel: true, wantVADArg: true},
+		{name: "vad off", vad: false, withModel: true, wantVADArg: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			argsOut := filepath.Join(dir, "argv.txt")
+			bin := filepath.Join(dir, "whisper-server")
+			script := "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> " + argsOut + "; done\nexit 0\n"
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatalf("write stub binary: %v", err)
+			}
+
+			cfg := transcribe.Config{
+				WhisperServerPath: bin,
+				ModelPath:         fakeModel(t),
+				Language:          "en",
+				VAD:               tc.vad,
+			}
+			if tc.withModel {
+				cfg.VADModelPath = fakeModel(t)
+			}
+
+			b, err := New(cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer b.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = b.ensureServer(ctx)
+
+			data, err := os.ReadFile(argsOut)
+			if err != nil {
+				t.Fatalf("read argv file: %v", err)
+			}
+			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+			indexOf := func(flag string) int {
+				for i, l := range lines {
+					if l == flag {
+						return i
+					}
+				}
+				return -1
+			}
+
+			if got := indexOf("--vad") >= 0; got != tc.wantVADArg {
+				t.Errorf("--vad present = %v, want %v (full argv: %v)", got, tc.wantVADArg, lines)
+			}
+			idx := indexOf("--vad-model")
+			if tc.wantVADArg {
+				if idx < 0 || idx+1 >= len(lines) {
+					t.Fatalf("--vad-model missing from argv: %v", lines)
+				}
+				if got := lines[idx+1]; got != cfg.VADModelPath {
+					t.Errorf("--vad-model value = %q, want %q", got, cfg.VADModelPath)
+				}
+			} else if idx >= 0 {
+				t.Errorf("--vad-model present with vad off (full argv: %v)", lines)
+			}
+		})
+	}
+}
+
 func TestSpawnArgs_ThreadsAndGPU(t *testing.T) {
 	// Skip on builders that cannot run /bin/sh (very unusual; the
 	// rest of the test suite already assumes a POSIX shell).

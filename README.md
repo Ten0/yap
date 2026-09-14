@@ -124,6 +124,8 @@ backend = "whisperlocal"        # default. Set to "groq" or "openai" for a remot
 model = "base.en"               # whisperlocal: base.en (only pinned). remote: backend-specific.
 model_path = ""                 # explicit local model path; empty auto-resolves from the cache
 whisper_server_path = ""        # explicit whisper-server binary; empty resolves via PATH
+vad = true                      # drop non-speech audio instead of transcribing it as a phrase
+vad_model_path = ""             # explicit Silero VAD model; empty fetches the pinned one
 language = ""                   # empty = auto-detect
 api_url = ""                    # empty = backend default (remote backends only)
 api_key = ""                    # or env: YAP_API_KEY / GROQ_API_KEY

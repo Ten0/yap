@@ -105,6 +105,16 @@ type Config struct {
 	// only by the whisperlocal backend; ignored by remote backends.
 	// Defaults to true to match whisper.cpp's own default behavior.
 	WhisperUseGPU bool
+	// VAD enables whisper.cpp's voice activity detection, which drops
+	// audio containing no speech before it is decoded. Without it,
+	// silence and room noise transcribe as whatever phrase the model
+	// finds likeliest -- "Thank you." and friends. Used only by the
+	// whisperlocal backend; ignored by remote backends.
+	VAD bool
+	// VADModelPath points at a Silero VAD model file. Empty resolves
+	// the pinned model from the cache, downloading it when absent.
+	// Used only by the whisperlocal backend.
+	VADModelPath string
 	// Timeout is the per-request timeout. Zero means the backend's
 	// default. Ignored when HTTPClient is set.
 	Timeout time.Duration

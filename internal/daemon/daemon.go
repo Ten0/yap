@@ -100,6 +100,8 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 		WhisperServerPath: tc.WhisperServerPath,
 		WhisperThreads:    tc.WhisperThreads,
 		WhisperUseGPU:     tc.WhisperUseGPU,
+		VAD:               tc.VAD,
+		VADModelPath:      tc.VADModelPath,
 		Timeout:           pcfg.DefaultTimeout,
 	})
 }
