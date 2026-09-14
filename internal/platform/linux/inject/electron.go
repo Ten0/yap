@@ -52,7 +52,21 @@ func (s *electronStrategy) Supports(target yinject.Target) bool {
 	if s.opts.ElectronStrategy != "" && s.opts.ElectronStrategy != "clipboard" {
 		return false
 	}
-	return target.AppType == yinject.AppElectron || target.AppType == yinject.AppBrowser
+	return target.AppType == yinject.AppElectron ||
+		target.AppType == yinject.AppBrowser ||
+		target.AppType == yinject.AppTerminal
+}
+
+// pasteChord is the key combination that pastes the clipboard in the
+// target. Ctrl+V is the desktop convention, but a terminal passes it
+// through to the program it is running -- readline reads it as
+// quoted-insert, vim as visual block -- so terminals paste with
+// Ctrl+Shift+V instead.
+func pasteChord(target yinject.Target) (xdotool string, wtypeArgs []string) {
+	if target.AppType == yinject.AppTerminal {
+		return "ctrl+shift+v", []string{"-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"}
+	}
+	return "ctrl+v", []string{"-M", "ctrl", "v", "-m", "ctrl"}
 }
 
 // Deliver writes text to the clipboard, synthesizes a paste keystroke
@@ -67,9 +81,9 @@ func (s *electronStrategy) Deliver(ctx context.Context, target yinject.Target, t
 	var pasteErr error
 	switch target.DisplayServer {
 	case "wayland":
-		pasteErr = s.synthesizeCtrlVWayland(ctx)
+		pasteErr = s.synthesizePasteWayland(ctx, target)
 	case "x11":
-		pasteErr = s.synthesizeCtrlVX11(ctx)
+		pasteErr = s.synthesizePasteX11(ctx, target)
 	default:
 		pasteErr = yinject.ErrStrategyUnsupported
 	}
@@ -92,27 +106,29 @@ func (s *electronStrategy) Deliver(ctx context.Context, target yinject.Target, t
 	return nil
 }
 
-// synthesizeCtrlVWayland sends Ctrl+V via wtype. The strategy uses the
-// pressed/released modifier syntax wtype expects.
-func (s *electronStrategy) synthesizeCtrlVWayland(ctx context.Context) error {
+// synthesizePasteWayland sends the target's paste chord via wtype. The
+// strategy uses the pressed/released modifier syntax wtype expects.
+func (s *electronStrategy) synthesizePasteWayland(ctx context.Context, target yinject.Target) error {
 	if _, err := s.deps.LookPath("wtype"); err != nil {
 		return yinject.ErrStrategyUnsupported
 	}
-	cmd := s.deps.ExecCommandContext(ctx, "wtype", "-M", "ctrl", "v", "-m", "ctrl")
+	_, args := pasteChord(target)
+	cmd := s.deps.ExecCommandContext(ctx, "wtype", args...)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("wtype ctrl+v: %w", err)
+		return fmt.Errorf("wtype paste: %w", err)
 	}
 	return nil
 }
 
-// synthesizeCtrlVX11 sends Ctrl+V via xdotool.
-func (s *electronStrategy) synthesizeCtrlVX11(ctx context.Context) error {
+// synthesizePasteX11 sends the target's paste chord via xdotool.
+func (s *electronStrategy) synthesizePasteX11(ctx context.Context, target yinject.Target) error {
 	if _, err := s.deps.LookPath("xdotool"); err != nil {
 		return yinject.ErrStrategyUnsupported
 	}
-	cmd := s.deps.ExecCommandContext(ctx, "xdotool", "key", "--clearmodifiers", "ctrl+v")
+	chord, _ := pasteChord(target)
+	cmd := s.deps.ExecCommandContext(ctx, "xdotool", "key", "--clearmodifiers", chord)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("xdotool ctrl+v: %w", err)
+		return fmt.Errorf("xdotool paste: %w", err)
 	}
 	return nil
 }

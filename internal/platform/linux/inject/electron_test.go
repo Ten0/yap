@@ -158,11 +158,53 @@ func TestElectronSupports(t *testing.T) {
 	if !s.Supports(yinject.Target{AppType: yinject.AppBrowser}) {
 		t.Error("Supports must include Browser")
 	}
-	if s.Supports(yinject.Target{AppType: yinject.AppTerminal}) {
-		t.Error("Supports must reject terminal targets")
+	if !s.Supports(yinject.Target{AppType: yinject.AppTerminal}) {
+		t.Error("Supports must include terminals, which paste with Ctrl+Shift+V")
 	}
 	if s.Supports(yinject.Target{AppType: yinject.AppGeneric}) {
 		t.Error("Supports must reject generic targets")
+	}
+}
+
+func TestElectronPasteChordPerTarget(t *testing.T) {
+	cases := []struct {
+		name      string
+		appType   yinject.AppType
+		wantChord string
+	}{
+		{name: "terminal pastes with ctrl+shift+v", appType: yinject.AppTerminal, wantChord: "ctrl+shift+v"},
+		{name: "electron pastes with ctrl+v", appType: yinject.AppElectron, wantChord: "ctrl+v"},
+		{name: "browser pastes with ctrl+v", appType: yinject.AppBrowser, wantChord: "ctrl+v"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cb := &fakeClipboard{current: "old"}
+			var gotArgs []string
+			deps := Deps{
+				ClipboardRead:  cb.read,
+				ClipboardWrite: cb.write,
+				LookPath: func(name string) (string, error) {
+					if name == "xdotool" {
+						return "/usr/bin/xdotool", nil
+					}
+					return "", os.ErrNotExist
+				},
+				ExecCommandContext: func(_ context.Context, _ string, args ...string) *exec.Cmd {
+					gotArgs = args
+					return exec.Command("true")
+				},
+				SleepCtx: func(context.Context, time.Duration) error { return nil },
+			}
+			s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
+			tgt := yinject.Target{DisplayServer: "x11", AppType: tc.appType}
+			if err := s.Deliver(context.Background(), tgt, "x"); err != nil {
+				t.Fatalf("Deliver: %v", err)
+			}
+			if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != tc.wantChord {
+				t.Errorf("xdotool args = %v, want the chord %q last", gotArgs, tc.wantChord)
+			}
+		})
 	}
 }
 

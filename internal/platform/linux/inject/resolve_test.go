@@ -65,7 +65,7 @@ func TestResolve_TmuxBranch(t *testing.T) {
 	if decision.Target.AppType != yinject.AppTerminal {
 		t.Errorf("Target.AppType = %v, want AppTerminal", decision.Target.AppType)
 	}
-	if got, want := decision.Fallbacks, []string{"tmux", "osc52", "wayland"}; !equalStrings(got, want) {
+	if got, want := decision.Fallbacks, []string{"tmux", "osc52", "electron", "wayland"}; !equalStrings(got, want) {
 		t.Errorf("Fallbacks = %v, want %v", got, want)
 	}
 	if !strings.Contains(decision.Reason, "natural order") {
@@ -104,7 +104,7 @@ func TestResolve_OSC52Branch(t *testing.T) {
 	if decision.Target.AppType != yinject.AppTerminal {
 		t.Errorf("Target.AppType = %v, want AppTerminal", decision.Target.AppType)
 	}
-	if got, want := decision.Fallbacks, []string{"osc52", "wayland"}; !equalStrings(got, want) {
+	if got, want := decision.Fallbacks, []string{"osc52", "electron", "wayland"}; !equalStrings(got, want) {
 		t.Errorf("Fallbacks = %v, want %v", got, want)
 	}
 }
