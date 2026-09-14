@@ -150,6 +150,27 @@ func TestTranscribe_FakeSubprocessReturnsText(t *testing.T) {
 	}
 }
 
+// The daemon reports this value to operators instead of the configured
+// model name, so a backend that resolved an explicit model_path must
+// report that path rather than the name it ignored.
+func TestResolvedModel_ReportsTheResolvedPath(t *testing.T) {
+	bin := fakeBinary(t)
+	model := fakeModel(t)
+	b, err := New(transcribe.Config{
+		WhisperServerPath: bin,
+		ModelPath:         model,
+		Model:             "base.en",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer b.Close()
+
+	if got := b.ResolvedModel(); got != model {
+		t.Errorf("ResolvedModel() = %q, want the resolved path %q", got, model)
+	}
+}
+
 func TestTranscribe_PlainTextResponseFallback(t *testing.T) {
 	url, cleanup := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

@@ -104,6 +104,32 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 	})
 }
 
+// modelReporter is the optional interface a Transcriber implements when
+// it resolves a concrete model at construction time. It is declared
+// here, in the consumer, so backends satisfy it structurally and the
+// Transcriber interface stays free of a method only some can answer.
+type modelReporter interface {
+	ResolvedModel() string
+}
+
+// resolvedModel reports the model the transcriber actually loaded,
+// falling back to the configured name for backends that resolve nothing
+// locally — the cloud backends name a remote model they never fetch.
+//
+// Reporting tc.Model directly is wrong whenever model_path is set:
+// whisperlocal treats that path as an escape hatch that wins outright
+// over the model name, so an operator reading the startup line or
+// `yap status` would be told "base.en" while whisper-server had loaded
+// something else entirely.
+func resolvedModel(t transcribe.Transcriber, configured string) string {
+	if r, ok := t.(modelReporter); ok {
+		if m := r.ResolvedModel(); m != "" {
+			return m
+		}
+	}
+	return configured
+}
+
 // NewTransformer bridges pcfg.TransformConfig into transform.Config
 // and looks up the factory via the registry. When the transform stage
 // is disabled in config, the factory is forced to "passthrough" so
@@ -466,6 +492,9 @@ func Run(cfg *config.Config, deps Deps) error {
 			}
 		}()
 	}
+	// Reported both on the startup line and by `yap status`, so resolve
+	// it once here rather than repeating the fallback at each use site.
+	modelName := resolvedModel(transcriber, cfg.Transcription.Model)
 	// Phase 8: wrap the configured transform backend in a fallback
 	// decorator that falls back to passthrough on primary failure
 	// and raises a user-visible notification. A startup health probe
@@ -545,7 +574,7 @@ func Run(cfg *config.Config, deps Deps) error {
 			Version:    config.Version,
 			PID:        os.Getpid(),
 			Backend:    cfg.Transcription.Backend,
-			Model:      cfg.Transcription.Model,
+			Model:      modelName,
 		}
 	})
 
@@ -590,7 +619,7 @@ func Run(cfg *config.Config, deps Deps) error {
 		"pid", os.Getpid(),
 		"config", configPath,
 		"backend", cfg.Transcription.Backend,
-		"model", cfg.Transcription.Model,
+		"model", modelName,
 		"hotkey", cfg.General.Hotkey,
 		"mode", cfg.General.Mode,
 	)

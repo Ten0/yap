@@ -419,6 +419,50 @@ func TestFallbackInterfaceSatisfied(t *testing.T) {
 	var _ transform.Transformer = (*fallback.Transformer)(nil)
 }
 
+// -- resolvedModel -------------------------------------------------------
+
+// fakeNonResolvingTranscriber satisfies transcribe.Transcriber without
+// resolving a model locally, standing in for the cloud backends that
+// name a remote model they never fetch.
+type fakeNonResolvingTranscriber struct{}
+
+func (fakeNonResolvingTranscriber) Transcribe(context.Context, io.Reader, transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
+	return nil, nil
+}
+
+// fakeResolvingTranscriber additionally reports a resolved model, as
+// whisperlocal does once model_path has won over the model name.
+type fakeResolvingTranscriber struct{ resolved string }
+
+func (fakeResolvingTranscriber) Transcribe(context.Context, io.Reader, transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
+	return nil, nil
+}
+
+func (f fakeResolvingTranscriber) ResolvedModel() string { return f.resolved }
+
+func TestResolvedModel(t *testing.T) {
+	const configured = "base.en"
+	const resolved = "/nix/store/xxx-ggml-large-v3-turbo.bin"
+
+	tests := []struct {
+		name        string
+		transcriber transcribe.Transcriber
+		want        string
+	}{
+		{"backend resolves nothing", fakeNonResolvingTranscriber{}, configured},
+		{"backend resolves a model", fakeResolvingTranscriber{resolved: resolved}, resolved},
+		{"backend resolves an empty string", fakeResolvingTranscriber{}, configured},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolvedModel(tc.transcriber, configured); got != tc.want {
+				t.Errorf("resolvedModel() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // -- daemon.Run startup log test fixture --------------------------------
 //
 // Bug 13 fix: daemon.Run must emit a single structured INFO line the
