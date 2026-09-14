@@ -169,6 +169,7 @@ const runtimeHelperTmpl = `  # Runtime dependencies injected into the wrapped ya
         --prefix PATH : ${lib.makeBinPath runtimeDeps} \
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}
     '';
+    meta.mainProgram = "yap";
   };`
 
 // nixosModuleTemplate is the full NixOS module. It wraps the yap binary

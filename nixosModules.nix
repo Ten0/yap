@@ -52,6 +52,7 @@ let
         --prefix PATH : ${lib.makeBinPath runtimeDeps} \
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}
     '';
+    meta.mainProgram = "yap";
   };
 
   configFile = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
