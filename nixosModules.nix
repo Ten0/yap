@@ -354,6 +354,7 @@ in {
         Unit = {
           Description = "yap hold-to-talk voice dictation daemon";
           After = [ "pipewire.service" ];
+          X-Restart-Triggers = [ configFile ];
         };
         Service = {
           ExecStart = "${lib.getExe wrappedPkg} listen --foreground";
