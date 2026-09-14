@@ -54,7 +54,9 @@ func makeStrategies(deliveredAt *[]string) []Strategy {
 	}, deliveredAt: deliveredAt}
 	osc52 := &recordingStrategy{name: "osc52", supportsFn: supportsType(yinject.AppTerminal), deliveredAt: deliveredAt}
 	electron := &recordingStrategy{name: "electron", supportsFn: func(t yinject.Target) bool {
-		return t.AppType == yinject.AppElectron || t.AppType == yinject.AppBrowser
+		return t.AppType == yinject.AppElectron ||
+			t.AppType == yinject.AppBrowser ||
+			t.AppType == yinject.AppTerminal
 	}, deliveredAt: deliveredAt}
 	wayland := &recordingStrategy{name: "wayland", supportsFn: func(t yinject.Target) bool {
 		return t.DisplayServer == "wayland"
@@ -83,7 +85,7 @@ func TestSelect_TerminalNoTmux(t *testing.T) {
 		DisplayServer: "wayland",
 		AppType:       yinject.AppTerminal,
 	})
-	want := []string{"osc52", "wayland"}
+	want := []string{"osc52", "electron", "wayland"}
 	if !equalStrings(names(got), want) {
 		t.Errorf("got %v, want %v", names(got), want)
 	}
@@ -95,7 +97,7 @@ func TestSelect_TerminalWithTmux(t *testing.T) {
 		AppType:       yinject.AppTerminal,
 		Tmux:          true,
 	})
-	want := []string{"tmux", "osc52", "wayland"}
+	want := []string{"tmux", "osc52", "electron", "wayland"}
 	if !equalStrings(names(got), want) {
 		t.Errorf("got %v, want %v", names(got), want)
 	}
@@ -261,7 +263,7 @@ func TestSelect_OverrideAgainstUnknownStrategyIgnored(t *testing.T) {
 		AppClass:      "kitty",
 		AppType:       yinject.AppTerminal,
 	})
-	want := []string{"osc52", "wayland"}
+	want := []string{"osc52", "electron", "wayland"}
 	if !equalStrings(names(got), want) {
 		t.Errorf("got %v, want %v (override should be ignored)", names(got), want)
 	}
@@ -304,7 +306,7 @@ func TestSelectStrategies_UnsupportedOverrideFallsThrough(t *testing.T) {
 		AppClass:      "kitty",
 		AppType:       yinject.AppTerminal,
 	}).strategies
-	want := []string{"osc52", "wayland"}
+	want := []string{"osc52", "electron", "wayland"}
 	if !equalStrings(names(got), want) {
 		t.Errorf("got %v, want %v (unsupported override must fall through)", names(got), want)
 	}
