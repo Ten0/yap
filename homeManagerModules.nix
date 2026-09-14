@@ -19,7 +19,9 @@ let
   # importing this module get an empty runtimeDeps, and wrappedPkg
   # below becomes a pure passthrough symlinkJoin.
   runtimeDeps = lib.optionals pkgs.stdenv.isLinux (with pkgs; [
+    wl-clipboard
     wtype
+    xclip
     xdotool
     xprop
     ydotool
