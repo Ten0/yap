@@ -131,6 +131,11 @@ in {
           default = false;
           description = "Append every transcription to history.jsonl";
         };
+        log_transcripts = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Log the text going into and out of the transform stage. Off by default because a transcript is dictation and the log is usually readable by more than its author";
+        };
         stream_partials = lib.mkOption {
           type = lib.types.bool;
           default = true;

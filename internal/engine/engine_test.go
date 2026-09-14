@@ -1,9 +1,11 @@
 package engine_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -299,6 +301,73 @@ func TestEngineRun_StreamingMultiChunk(t *testing.T) {
 	require.Equal(t, []string{"hello ", "world", "!"}, received)
 	require.Equal(t, 3, chunks)
 	require.True(t, lastFinal)
+}
+
+// TestEngineRun_TransformLogging asserts the gate: the summary is
+// emitted either way, because it is the only trace that the pipeline's
+// one network call happened at all, while the transcript itself appears
+// only when general.log_transcripts asks for it.
+func TestEngineRun_TransformLogging(t *testing.T) {
+	cases := []struct {
+		name     string
+		gate     bool
+		wantText bool
+	}{
+		{name: "gate off logs the summary only", gate: false, wantText: false},
+		{name: "gate on logs the text too", gate: true, wantText: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			backend := mock.New(
+				transcribe.TranscriptChunk{Text: "hello world", IsFinal: true, Language: "en"},
+			)
+			rec := &mockRecorder{wavData: []byte("fake-wav")}
+			eng, err := engine.New(rec, &mockChime{}, nil, backend, passthrough.New(),
+				&recordingInjector{}, slog.New(slog.NewJSONHandler(&buf, nil)))
+			require.NoError(t, err)
+
+			err = eng.Run(context.Background(), engine.RunOptions{
+				RecordCtx:        preCancelledRecCtx(),
+				StreamPartials:   false,
+				LogTranscripts:   tc.gate,
+				TransformBackend: "openai",
+				ContextSource:    "claudecode",
+				TransformOpts:    transform.Options{Context: "pretend session"[:7]},
+			})
+			require.NoError(t, err)
+
+			logged := buf.String()
+			require.Contains(t, logged, "transform complete",
+				"the summary must be logged regardless of the gate")
+			for _, key := range []string{"in_chars", "out_chars", "changed"} {
+				require.Contains(t, logged, key, "summary must carry %s", key)
+			}
+			// Provenance is content-free, so it is reported whether or
+			// not transcripts are enabled: which backend ran, and
+			// whether a hint provider supplied conversation context.
+			require.Contains(t, logged, `"backend":"openai"`,
+				"summary must say which backend ran, gate or no gate")
+			require.Contains(t, logged, `"context_source":"claudecode"`,
+				"summary must say where the context came from")
+			require.Contains(t, logged, `"context_bytes":7`,
+				"summary must size the context without logging it")
+			require.NotContains(t, logged, "pretend session",
+				"the context itself must never be logged")
+
+			// passthrough leaves the text alone, so the transcript shows
+			// up verbatim on both sides when the gate is open.
+			if tc.wantText {
+				require.Contains(t, logged, `"in":"hello world"`)
+				require.Contains(t, logged, `"out":"hello world"`)
+			} else {
+				require.NotContains(t, logged, `"in":"hello world"`,
+					"the transcript must not be logged unless asked for")
+				require.NotContains(t, logged, `"out":"hello world"`)
+			}
+		})
+	}
 }
 
 func TestEngineRun_StreamPartialsFalse_BatchesToSingleChunk(t *testing.T) {

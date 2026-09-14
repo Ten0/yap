@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Enriquefft/yap/internal/platform"
@@ -154,6 +155,22 @@ type RunOptions struct {
 	// legal null case (no extra context).
 	TransformOpts transform.Options
 
+	// LogTranscripts includes the text entering and leaving the
+	// transform stage in the "transform complete" log line. The
+	// summary is logged either way; this only controls the content.
+	LogTranscripts bool
+
+	// TransformBackend names the configured transform backend, so the
+	// log can say whether a correction model was called at all or the
+	// text went straight through. "passthrough" means no call.
+	TransformBackend string
+
+	// ContextSource names the hint provider that supplied the
+	// conversation context, or is empty when none matched. It answers
+	// "did the model see my Claude Code session?" without logging the
+	// session itself.
+	ContextSource string
+
 	// OutputOverride, when non-nil, replaces the engine's default
 	// Injector for this Run call. The exec output handler uses this
 	// to pipe transcript to an external command instead of injecting
@@ -245,15 +262,31 @@ func (e *Engine) runPipeline(ctx context.Context, wav []byte, opts RunOptions, s
 		inChan = e.batchChunks(pipeCtx, transcribeChan)
 	}
 
+	// The transform stage is the one network call in the pipeline: it
+	// costs money and it can degrade to passthrough without changing
+	// anything the user sees. Nothing downstream retains its input or
+	// output -- chunks stream straight into the injector -- so the only
+	// way to report on it is to tap the stream as it passes.
+	transformStarted := time.Now()
+	sent := &textTap{}
+	got := &textTap{}
+	inChan = tee(pipeCtx, inChan, sent)
+
 	transformChan, err := e.transformer.Transform(pipeCtx, inChan, opts.TransformOpts)
 	if err != nil {
 		return fmt.Errorf("transform: %w", err)
 	}
+	transformChan = tee(pipeCtx, transformChan, got)
 
 	output := e.injector
 	if opts.OutputOverride != nil {
 		output = opts.OutputOverride
 	}
+
+	// Deferred so the elapsed time covers the round trip even when
+	// injection fails, and so a cancelled pipeline still reports what
+	// it managed to send.
+	defer e.logTransform(ctx, opts, transformStarted, sent, got)
 
 	if err := output.InjectStream(pipeCtx, transformChan); err != nil {
 		// Cancellation is the normal way the daemon stops the
@@ -289,6 +322,77 @@ func (e *Engine) runPipeline(ctx context.Context, wav []byte, opts RunOptions, s
 // downstream and returns; it never silently swallows transcription
 // errors. On ctx cancellation it returns without emitting anything,
 // because the consumer is already on its way down.
+// textTap accumulates the text of a chunk stream as it flows past. The
+// tee goroutine writes it and the deferred log reads it after the
+// stream has drained, so the mutex guards that hand-off rather than
+// concurrent use.
+type textTap struct {
+	mu sync.Mutex
+	sb strings.Builder
+}
+
+func (t *textTap) add(s string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sb.WriteString(s)
+}
+
+func (t *textTap) text() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sb.String()
+}
+
+// tee forwards a chunk stream unchanged while copying its text into
+// tap. It preserves the channel contract the pipeline relies on: the
+// output closes when the input does, and a cancelled ctx stops the
+// forward without leaking the goroutine.
+func tee(ctx context.Context, in <-chan transcribe.TranscriptChunk, tap *textTap) <-chan transcribe.TranscriptChunk {
+	out := make(chan transcribe.TranscriptChunk)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case chunk, ok := <-in:
+				if !ok {
+					return
+				}
+				tap.add(chunk.Text)
+				select {
+				case <-ctx.Done():
+					return
+				case out <- chunk:
+				}
+			}
+		}
+	}()
+	return out
+}
+
+// logTransform reports what the transform stage did. The summary is
+// always emitted: it is the only trace that the one network call in the
+// pipeline happened at all, and it carries no transcript. The text
+// itself is gated on general.log_transcripts, because dictation is
+// content and the journal is usually readable by more than its author.
+func (e *Engine) logTransform(ctx context.Context, opts RunOptions, started time.Time, sent, got *textTap) {
+	in, out := sent.text(), got.text()
+	attrs := []any{
+		"backend", opts.TransformBackend,
+		"context_source", opts.ContextSource,
+		"context_bytes", len(opts.TransformOpts.Context),
+		"elapsed_ms", time.Since(started).Milliseconds(),
+		"in_chars", len(in),
+		"out_chars", len(out),
+		"changed", in != out,
+	}
+	if opts.LogTranscripts {
+		attrs = append(attrs, "in", in, "out", out)
+	}
+	e.logger.InfoContext(ctx, "transform complete", attrs...)
+}
+
 func (e *Engine) batchChunks(ctx context.Context, in <-chan transcribe.TranscriptChunk) <-chan transcribe.TranscriptChunk {
 	out := make(chan transcribe.TranscriptChunk, 1)
 	go func() {

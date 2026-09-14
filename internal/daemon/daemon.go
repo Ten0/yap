@@ -259,6 +259,11 @@ func NewTransformerWithFallback(
 		return nil, err
 	}
 	wrapped, err := fallback.New(primary, fb, func(err error) {
+		// The toast tells whoever is at the keyboard; the log is what
+		// says so afterwards. Without this, a degraded correction is
+		// indistinguishable in the journal from one that worked.
+		slog.Default().Warn("transform fell back to passthrough",
+			"backend", name, "error", err)
 		notifier.Notify(
 			"yap: transform failed",
 			fmt.Sprintf("%s: %v — injected raw transcription", name, err),
@@ -268,6 +273,17 @@ func NewTransformerWithFallback(
 		return nil, err
 	}
 	return wrapped, nil
+}
+
+// transformBackendName is the backend the transform stage will use,
+// reported in the pipeline log. A disabled or unset backend is
+// "passthrough", which is the honest answer to "was a correction model
+// called?" -- no.
+func transformBackendName(tc pcfg.TransformConfig) string {
+	if !tc.Enabled || tc.Backend == "" {
+		return "passthrough"
+	}
+	return tc.Backend
 }
 
 // passthroughTransformer constructs the default identity transformer.
@@ -767,19 +783,22 @@ func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 		}()
 
 		err := d.eng.Run(d.ctx, engine.RunOptions{
-			RecordCtx:      recCtx,
-			StartChime:     assets.StartChime,
-			StopChime:      assets.StopChime,
-			WarningChime:   assets.WarningChime,
-			TimeoutSec:     timeoutSec,
-			StreamPartials: d.cfg.General.StreamPartials,
+			RecordCtx:        recCtx,
+			StartChime:       assets.StartChime,
+			StopChime:        assets.StopChime,
+			WarningChime:     assets.WarningChime,
+			TimeoutSec:       timeoutSec,
+			StreamPartials:   d.cfg.General.StreamPartials,
+			LogTranscripts:   d.cfg.General.LogTranscripts,
+			TransformBackend: transformBackendName(d.cfg.Transform),
+			ContextSource:    bundle.Source,
 			OnRecordingStop: func() {
 				slog.Default().Info("state", "from", stateRecording, "to", stateProcessing)
 				d.state.setState(stateProcessing)
 			},
-			TranscribeOpts:  transcribeOpts,
-			TransformOpts:   transformOpts,
-			OutputOverride:  outputOverride,
+			TranscribeOpts:   transcribeOpts,
+			TransformOpts:    transformOpts,
+			OutputOverride:   outputOverride,
 		})
 		if err != nil &&
 			!errors.Is(err, context.Canceled) &&
