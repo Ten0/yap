@@ -353,6 +353,136 @@ func TestTransform_CancelledDuringPrimary_NoFallback(t *testing.T) {
 	}
 }
 
+// TestTransform_ImplausibleExpansion_FallsBackToRaw covers the failure
+// the guard exists for: the primary succeeded, emitted no error, and
+// answered its prompt instead of repairing the transcript. The output
+// is split across two chunks so the check is also shown to measure the
+// whole staged stream rather than the last chunk.
+func TestTransform_ImplausibleExpansion_FallsBackToRaw(t *testing.T) {
+	primary := &stubTransformer{
+		emit: []transcribe.TranscriptChunk{
+			{Text: "I'm ready to repair speech-to-text transcripts. "},
+			{Text: "Please provide the transcript you'd like me to fix.", IsFinal: true},
+		},
+	}
+	fb := &echoTransformer{}
+	var onErrCalls int32
+	var captured error
+	fbt, _ := fallback.New(primary, fb, func(err error) {
+		atomic.AddInt32(&onErrCalls, 1)
+		captured = err
+	})
+
+	raw := transcribe.TranscriptChunk{Text: " speech to text.", IsFinal: true}
+	out, err := fbt.Transform(context.Background(), inputChunks(raw), transform.Options{})
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	got := drain(out)
+	if len(got) != 1 || got[0].Text != " speech to text." {
+		t.Errorf("got = %+v, want the raw transcript replayed, not the primary's reply", got)
+	}
+	if n := atomic.LoadInt32(&fb.calls); n != 1 {
+		t.Errorf("fallback calls = %d, want 1", n)
+	}
+	if n := atomic.LoadInt32(&onErrCalls); n != 1 {
+		t.Errorf("OnError calls = %d, want 1", n)
+	}
+	if !errors.Is(captured, fallback.ErrImplausibleExpansion) {
+		t.Errorf("captured err = %v, want ErrImplausibleExpansion", captured)
+	}
+}
+
+// TestTransform_GenuineRepair_NotRejected pins the other side of the
+// threshold. A real repair tracks its input closely — it trims and
+// punctuates, so it tends to shrink — and must reach the caller
+// untouched with the fallback never invoked.
+func TestTransform_GenuineRepair_NotRejected(t *testing.T) {
+	primary := &stubTransformer{
+		emit: []transcribe.TranscriptChunk{
+			{Text: "Speech to text.", IsFinal: true},
+		},
+	}
+	fb := &echoTransformer{}
+	var onErrCalls int32
+	fbt, _ := fallback.New(primary, fb, func(error) { atomic.AddInt32(&onErrCalls, 1) })
+
+	raw := transcribe.TranscriptChunk{Text: " speech to text.\n", IsFinal: true}
+	out, err := fbt.Transform(context.Background(), inputChunks(raw), transform.Options{})
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	got := drain(out)
+	if len(got) != 1 || got[0].Text != "Speech to text." {
+		t.Errorf("got = %+v, want the primary's repair", got)
+	}
+	if n := atomic.LoadInt32(&fb.calls); n != 0 {
+		t.Errorf("fallback calls = %d, want 0", n)
+	}
+	if n := atomic.LoadInt32(&onErrCalls); n != 0 {
+		t.Errorf("OnError calls = %d, want 0", n)
+	}
+}
+
+// TestTransform_ShortInputTolerance covers the floor. Two words gain
+// a capital and a full stop and blow past 2x on ratio alone, which is
+// why the threshold has an absolute floor as well — but a tiny input
+// answered with a paragraph must still be caught.
+func TestTransform_ShortInputTolerance(t *testing.T) {
+	cases := []struct {
+		name         string
+		in, out      string
+		wantFallback bool
+	}{
+		{
+			name: "punctuating two words is not an expansion",
+			in:   "ok then", out: "OK, then.",
+			wantFallback: false,
+		},
+		{
+			name: "a paragraph answering a fragment still trips",
+			in:   "ok then",
+			out: "Certainly! I can help you with that. Could you tell me a " +
+				"little more about what you would like me to do next?",
+			wantFallback: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &stubTransformer{
+				emit: []transcribe.TranscriptChunk{{Text: tc.out, IsFinal: true}},
+			}
+			fb := &echoTransformer{}
+			fbt, _ := fallback.New(primary, fb, nil)
+
+			out, err := fbt.Transform(context.Background(), inputChunks(
+				transcribe.TranscriptChunk{Text: tc.in, IsFinal: true},
+			), transform.Options{})
+			if err != nil {
+				t.Fatalf("Transform: %v", err)
+			}
+			got := drain(out)
+			if len(got) != 1 {
+				t.Fatalf("got %d chunks, want 1: %+v", len(got), got)
+			}
+			want := tc.out
+			if tc.wantFallback {
+				want = tc.in
+			}
+			if got[0].Text != want {
+				t.Errorf("text = %q, want %q", got[0].Text, want)
+			}
+			wantCalls := int32(0)
+			if tc.wantFallback {
+				wantCalls = 1
+			}
+			if n := atomic.LoadInt32(&fb.calls); n != wantCalls {
+				t.Errorf("fallback calls = %d, want %d", n, wantCalls)
+			}
+		})
+	}
+}
+
 // Ensure the decorator still satisfies transform.Transformer.
 func TestTransform_InterfaceSatisfied(t *testing.T) {
 	var _ transform.Transformer = (*fallback.Transformer)(nil)
