@@ -387,7 +387,7 @@ const (
 type recordState struct {
 	mu     sync.Mutex
 	st     string // "idle", "recording", "processing"
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 }
 
 // state returns the current state string. The zero value ("") is
@@ -425,21 +425,22 @@ func (rs *recordState) isRecording() bool {
 }
 
 // setCancel sets the cancel function for the current recording.
-func (rs *recordState) setCancel(cancel context.CancelFunc) {
+func (rs *recordState) setCancel(cancel context.CancelCauseFunc) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.cancel = cancel
 }
 
-// cancelRecording cancels the current recording context. It does NOT
+// cancelRecording cancels the current recording context, attributing
+// the stop to cause so the engine can name it in the log. It does NOT
 // change the state — state transitions are handled by OnRecordingStop
 // (recording → processing) and the deferred cleanup in startRecording
 // (processing → idle).
-func (rs *recordState) cancelRecording() {
+func (rs *recordState) cancelRecording(cause error) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if rs.cancel != nil {
-		rs.cancel()
+		rs.cancel(cause)
 		rs.cancel = nil
 	}
 }
@@ -490,10 +491,28 @@ func Run(cfg *config.Config, deps Deps) error {
 	}
 	defer rec.Close()
 
-	// Signal-driven shutdown: SIGTERM or SIGINT cancels context.
-	ctx, stop := signal.NotifyContext(context.Background(),
-		syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
+	// Signal-driven shutdown: SIGTERM, SIGINT, or `yap stop` over IPC.
+	//
+	// The cancellation carries engine.ErrStopDaemonShutdown so that a
+	// recording in flight when the daemon goes down is logged as that,
+	// rather than left to be guessed at from a bare context.Canceled.
+	// signal.NotifyContext cannot carry a cause and wrapping it in a
+	// cause layer would not help: the parent's cancellation propagates
+	// its own context.Canceled to the child before any watcher could
+	// attach a better one. So the signals are taken on a channel, the
+	// same shape `yap record` uses for SIGUSR1.
+	ctx, shutdown := context.WithCancelCause(context.Background())
+	defer shutdown(engine.ErrStopDaemonShutdown)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	go func() {
+		select {
+		case <-signals:
+			shutdown(engine.ErrStopDaemonShutdown)
+		case <-ctx.Done():
+		}
+	}()
 
 	// Parse hotkey code from config.
 	hotkeyCode, err := deps.Platform.HotkeyCfg.ParseKey(cfg.General.Hotkey)
@@ -611,7 +630,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	}
 
 	// Wire IPC handlers.
-	srv.SetShutdownFn(stop)
+	srv.SetShutdownFn(func() { shutdown(engine.ErrStopDaemonShutdown) })
 	srv.SetToggleFn(func(execCmd string) string {
 		return d.toggleRecording(execCmd)
 	})
@@ -652,7 +671,7 @@ func Run(cfg *config.Config, deps Deps) error {
 			if !d.state.isRecording() {
 				return
 			}
-			d.state.cancelRecording()
+			d.state.cancelRecording(engine.ErrStopHotkeyRelease)
 		}
 		// toggle mode: onRelease is a no-op
 	}
@@ -697,8 +716,22 @@ func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 		return false
 	}
 
-	recCtx, recCancel := context.WithTimeout(d.ctx, time.Duration(timeoutSec)*time.Second)
-	d.state.setCancel(recCancel)
+	// Two layers, so every stop carries a cause the engine can name:
+	// recStop takes the sentinel from whichever site ends the recording
+	// (hotkey release, toggle, silence) and the timeout layer labels the
+	// deadline. A daemon shutdown cancels d.ctx, which is itself a cause
+	// layer carrying engine.ErrStopDaemonShutdown, and context.Cause
+	// reports a parent's cause through both of these children.
+	//
+	// Both layers must be released on every path, including the ones no
+	// stop site cancels (max_duration, a recorder error, a failed exec
+	// handler). recCancel alone is not enough: it releases the timer,
+	// but the cause layer stays registered as a child of d.ctx, and
+	// d.ctx lives as long as the daemon does.
+	recCtx, recStop := context.WithCancelCause(d.ctx)
+	recCtx, recCancel := context.WithTimeoutCause(recCtx,
+		time.Duration(timeoutSec)*time.Second, engine.ErrStopMaxDuration)
+	d.state.setCancel(recStop)
 	slog.Default().Info("state", "from", stateIdle, "to", stateRecording)
 	d.state.setState(stateRecording)
 
@@ -752,7 +785,7 @@ func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 					}
 				},
 				func() { // onSilence
-					d.state.cancelRecording()
+					d.state.cancelRecording(engine.ErrStopSilence)
 				},
 			)
 			fn.SetOnFrame(detector.Process)
@@ -765,6 +798,12 @@ func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 		handler, err := execoutput.New(execCmd, slog.Default())
 		if err != nil {
 			slog.Default().Error("exec output handler", "error", err)
+			// The pipeline never runs on this path, so release both
+			// layers here — nothing else will, and the deadline would
+			// stay armed for the whole max_duration while the cause
+			// layer stayed attached to d.ctx for the daemon's life.
+			recStop(nil)
+			recCancel()
 			d.state.setState(stateIdle)
 			return false
 		}
@@ -773,6 +812,13 @@ func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 	}
 
 	go func() {
+		// Releases both recording-context layers once the pipeline is
+		// done: the timer, and the cause layer's registration on
+		// d.ctx. Only recorder.Start reads recCtx and it returned long
+		// before this, so cancelling here cannot cut transcription
+		// short, and the stop reason was read and logged back then.
+		defer recCancel()
+		defer recStop(nil)
 		defer func() {
 			// Clear the frame notifier callback so the detector is inert.
 			if fn, ok := d.recorder.(platform.FrameNotifier); ok {
@@ -942,7 +988,7 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 // intended new state: "recording" if starting, "idle" if stopping.
 func (d *Daemon) toggleRecording(execCmd string) string {
 	if d.state.isActive() {
-		d.state.cancelRecording()
+		d.state.cancelRecording(engine.ErrStopToggle)
 		return stateIdle
 	}
 	timeoutSec := d.cfg.General.MaxDuration
