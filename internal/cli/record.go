@@ -204,14 +204,38 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	//     captured audio. SIGUSR1 (sent by `yap toggle`) cancels
 	//     only recCtx, the same way the daemon's hotkey-release
 	//     handler does.
-	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	//
+	// The interrupt is taken on a channel rather than through
+	// signal.NotifyContext because that constructor cannot attach a
+	// cause, and a cause added by wrapping it would lose the race:
+	// a parent's cancellation reaches the child carrying the parent's
+	// own bare context.Canceled, before any watcher could label it.
+	ctx, interrupt := context.WithCancelCause(parent)
+	defer interrupt(engine.ErrStopInterrupt)
+	sigStop := make(chan os.Signal, 1)
+	signal.Notify(sigStop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigStop)
+	go func() {
+		select {
+		case <-sigStop:
+			interrupt(engine.ErrStopInterrupt)
+		case <-ctx.Done():
+		}
+	}()
 
 	timeout := eff.General.MaxDuration
 	if timeout <= 0 {
 		timeout = 60
 	}
-	recCtx, recCancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	// Every layer carries a cause so the engine's stop-reason log names
+	// what ended the recording: Ctrl-C is the interrupt above, SIGUSR1
+	// is `yap toggle` asking it to stop, and the deadline is the
+	// max_duration budget. Without them every stop here would arrive as
+	// one indistinguishable context.Canceled.
+	recCtx, recStop := context.WithCancelCause(ctx)
+	defer recStop(nil)
+	recCtx, recCancel := context.WithTimeoutCause(recCtx,
+		time.Duration(timeout)*time.Second, engine.ErrStopMaxDuration)
 	defer recCancel()
 
 	sigUsr := make(chan os.Signal, 1)
@@ -220,7 +244,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	go func() {
 		select {
 		case <-sigUsr:
-			recCancel()
+			recStop(engine.ErrStopToggle)
 		case <-recCtx.Done():
 		}
 	}()

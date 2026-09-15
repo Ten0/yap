@@ -19,6 +19,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/engine"
 	"github.com/Enriquefft/yap/internal/ipc"
 	"github.com/Enriquefft/yap/internal/pidfile"
 	"github.com/Enriquefft/yap/internal/platform"
@@ -90,14 +91,20 @@ func TestRecordState(t *testing.T) {
 		t.Error("processing should not report isRecording")
 	}
 
-	// cancelRecording cancels the context but does not change state.
+	// cancelRecording cancels the context but does not change state,
+	// and hands the cancel function the cause naming the stop.
 	cancelCalled := false
-	rs.setCancel(func() {
+	var gotCause error
+	rs.setCancel(func(cause error) {
 		cancelCalled = true
+		gotCause = cause
 	})
-	rs.cancelRecording()
+	rs.cancelRecording(engine.ErrStopToggle)
 	if !cancelCalled {
 		t.Error("cancel function should be called")
+	}
+	if !errors.Is(gotCause, engine.ErrStopToggle) {
+		t.Errorf("cancel cause = %v, want %v", gotCause, engine.ErrStopToggle)
 	}
 	if rs.state() != stateProcessing {
 		t.Errorf("cancelRecording should not change state, got %q", rs.state())
@@ -110,7 +117,57 @@ func TestRecordState(t *testing.T) {
 	}
 
 	// Calling cancelRecording again should be safe (nil cancel).
-	rs.cancelRecording()
+	rs.cancelRecording(engine.ErrStopToggle)
+}
+
+// TestRecordStateCancelCauseReachesContext pins the plumbing the stop
+// reason log depends on: the sentinel a cancel site hands to
+// cancelRecording has to come back out of context.Cause on the
+// recording context, through the timeout layer startRecording wraps
+// around it.
+func TestRecordStateCancelCauseReachesContext(t *testing.T) {
+	causes := []error{
+		engine.ErrStopHotkeyRelease,
+		engine.ErrStopToggle,
+		engine.ErrStopSilence,
+	}
+	for _, cause := range causes {
+		t.Run(cause.Error(), func(t *testing.T) {
+			var rs recordState
+			base, stop := context.WithCancelCause(context.Background())
+			defer stop(nil)
+			recCtx, cancel := context.WithTimeoutCause(base, time.Hour, engine.ErrStopMaxDuration)
+			defer cancel()
+
+			rs.setCancel(stop)
+			rs.cancelRecording(cause)
+
+			if got := context.Cause(recCtx); !errors.Is(got, cause) {
+				t.Errorf("context.Cause = %v, want %v", got, cause)
+			}
+		})
+	}
+}
+
+// TestToggleRecordingCancelsWithToggleCause covers the toggle stop site
+// itself — `yap toggle` over IPC, and the hotkey in toggle mode. It has
+// to attribute the stop, or the engine sees a bare cancellation and
+// reports the recording as lost to a daemon shutdown.
+func TestToggleRecordingCancelsWithToggleCause(t *testing.T) {
+	c := config.Config(pcfg.DefaultConfig())
+	d := &Daemon{cfg: &c, ctx: context.Background()}
+
+	base, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
+	d.state.setCancel(stop)
+	d.state.setState(stateRecording)
+
+	if got := d.toggleRecording(""); got != stateIdle {
+		t.Errorf("toggleRecording = %q, want %q", got, stateIdle)
+	}
+	if got := context.Cause(base); !errors.Is(got, engine.ErrStopToggle) {
+		t.Errorf("context.Cause = %v, want %v", got, engine.ErrStopToggle)
+	}
 }
 
 // TestNew creates a Daemon instance with a nested config.
@@ -715,6 +772,221 @@ func TestRun_EmitsStartupLog(t *testing.T) {
 	}
 	if !stopped {
 		t.Errorf("shutdown log line never appeared; captured:\n%s", ch.bufString())
+	}
+}
+
+// releaseHotkey is a platform.Hotkey that hands the daemon's own
+// callbacks back to the test instead of watching a device. Driving
+// those closures is the whole point: which sentinel a hotkey release
+// stops with is decided inside daemon.Run, so a test that called
+// cancelRecording itself would prove nothing about that choice.
+type releaseHotkey struct {
+	ready     chan struct{}
+	onPress   func()
+	onRelease func()
+}
+
+func (h *releaseHotkey) Listen(ctx context.Context, key platform.KeyCode, onPress, onRelease func()) {
+	h.onPress, h.onRelease = onPress, onRelease
+	close(h.ready)
+	<-ctx.Done()
+}
+func (h *releaseHotkey) Close() {}
+
+// waitForStopReason polls the captured log for the engine's single
+// "recording stopped" line and returns the reason it named.
+func waitForStopReason(t *testing.T, ch *captureHandler, budget time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		for _, rec := range ch.records() {
+			if rec["msg"] == "recording stopped" {
+				reason, _ := rec["reason"].(string)
+				return reason
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no \"recording stopped\" line within %s; captured:\n%s", budget, ch.bufString())
+	return ""
+}
+
+// TestRun_LogsHotkeyReleaseStopReason drives a real daemon through a
+// press and a release in hold mode and asserts the recording is logged
+// as ending for that reason. It is the end-to-end guard on the stop
+// site that cannot be reached any other way — onRelease is a closure
+// built inside Run, and its sentinel is exactly the sort of thing a
+// copy-paste would get wrong without a test watching.
+func TestRun_LogsHotkeyReleaseStopReason(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatalf("mkdir runtime: %v", err)
+	}
+	cfgFile := filepath.Join(tmp, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte("# intentionally empty\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("YAP_CONFIG", cfgFile)
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+
+	prev := slog.Default()
+	ch := newCaptureHandler()
+	slog.SetDefault(slog.New(ch))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cfg := pcfg.DefaultConfig()
+	cfg.General.Hotkey = "KEY_RIGHTCTRL"
+	cfg.General.Mode = "hold"
+	cfg.Transcription.Backend = "mock"
+	cfg.Transcription.Model = "mock"
+	cfg.Transform.Enabled = false
+	cfg.Transform.Backend = "passthrough"
+	cfg.Hint.Enabled = false
+	c := config.Config(cfg)
+
+	hk := &releaseHotkey{ready: make(chan struct{})}
+	p := fakeDaemonPlatform()
+	p.NewHotkey = func() (platform.Hotkey, error) { return hk, nil }
+
+	deps := Deps{
+		Platform:     p,
+		PIDLock:      pidfile.Acquire,
+		NewIPCServer: ipc.NewServer,
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- Run(&c, deps) }()
+
+	select {
+	case <-hk.ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon never started listening for the hotkey")
+	}
+
+	// Press then release. startRecording sets the state synchronously
+	// before spawning its pipeline goroutine, so the release always
+	// finds a recording in flight to cancel.
+	hk.onPress()
+	hk.onRelease()
+
+	if got := waitForStopReason(t, ch, 3*time.Second); got != "hotkey_release" {
+		t.Errorf("stop reason = %q, want %q; captured:\n%s", got, "hotkey_release", ch.bufString())
+	}
+
+	sockPath, err := pidfile.SocketPath()
+	if err != nil {
+		t.Fatalf("resolve sock path: %v", err)
+	}
+	if _, err := ipc.Send(sockPath, ipc.CmdStop, 2*time.Second); err != nil {
+		t.Fatalf("ipc stop: %v", err)
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("daemon Run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon Run did not exit within 3s of IPC stop")
+	}
+}
+
+// TestRun_LogsDaemonShutdownStopReason is the second end-to-end guard
+// on a stop site Run builds internally: a recording still in flight
+// when the daemon goes down must be logged as daemon_shutdown.
+//
+// It is what makes engine.ErrStopDaemonShutdown a wired sentinel rather
+// than a documented one. The reason cannot be recovered from a bare
+// cancellation instead — `yap record` is a process with no daemon in
+// it, and its Ctrl-C arrives at the engine as exactly the same bare
+// context.Canceled — so the shutdown path has to attach the cause, and
+// this is the test that notices when it stops doing so.
+func TestRun_LogsDaemonShutdownStopReason(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatalf("mkdir runtime: %v", err)
+	}
+	cfgFile := filepath.Join(tmp, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte("# intentionally empty\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("YAP_CONFIG", cfgFile)
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+
+	prev := slog.Default()
+	ch := newCaptureHandler()
+	slog.SetDefault(slog.New(ch))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cfg := pcfg.DefaultConfig()
+	cfg.General.Hotkey = "KEY_RIGHTCTRL"
+	cfg.General.Mode = "hold"
+	cfg.Transcription.Backend = "mock"
+	cfg.Transcription.Model = "mock"
+	cfg.Transform.Enabled = false
+	cfg.Transform.Backend = "passthrough"
+	cfg.Hint.Enabled = false
+	c := config.Config(cfg)
+
+	hk := &releaseHotkey{ready: make(chan struct{})}
+	p := fakeDaemonPlatform()
+	p.NewHotkey = func() (platform.Hotkey, error) { return hk, nil }
+
+	deps := Deps{
+		Platform:     p,
+		PIDLock:      pidfile.Acquire,
+		NewIPCServer: ipc.NewServer,
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- Run(&c, deps) }()
+
+	select {
+	case <-hk.ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon never started listening for the hotkey")
+	}
+
+	// Press and never release: startRecording sets the state and builds
+	// the recording context synchronously, so the shutdown below always
+	// finds a recording to take down.
+	hk.onPress()
+
+	sockPath, err := pidfile.SocketPath()
+	if err != nil {
+		t.Fatalf("resolve sock path: %v", err)
+	}
+	// IPC rather than a signal, for the reason the startup-log test
+	// gives: a real SIGTERM would race with the test binary's own
+	// handlers. Both reach the same labelled cancel.
+	if _, err := ipc.Send(sockPath, ipc.CmdStop, 2*time.Second); err != nil {
+		t.Fatalf("ipc stop: %v", err)
+	}
+
+	if got := waitForStopReason(t, ch, 3*time.Second); got != "daemon_shutdown" {
+		t.Errorf("stop reason = %q, want %q; captured:\n%s", got, "daemon_shutdown", ch.bufString())
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("daemon Run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon Run did not exit within 3s of IPC stop")
 	}
 }
 

@@ -192,11 +192,20 @@ func (e *Engine) Run(ctx context.Context, opts RunOptions) error {
 	stopWarn := e.scheduleWarning(opts)
 	defer stopWarn()
 
-	if err := e.recorder.Start(opts.RecordCtx); err != nil &&
-		!errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) {
-		e.logger.ErrorContext(ctx, "recorder error", "error", err)
-		return fmt.Errorf("record: %w", err)
+	// One line per recording, naming which of the six ways it ended.
+	// It belongs here rather than in OnRecordingStop because `yap
+	// record` sets no such callback, and because the recorder-error
+	// path below returns before any callback would have run.
+	recErr := e.recorder.Start(opts.RecordCtx)
+	reason := stopReason(opts.RecordCtx, recErr)
+	e.logger.InfoContext(ctx, "recording stopped", "reason", reason)
+
+	// reasonRecorderError is exactly "recErr is a real failure rather
+	// than a cancellation", so the reason doubles as the branch
+	// condition and the two cannot drift apart.
+	if reason == reasonRecorderError {
+		e.logger.ErrorContext(ctx, "recorder error", "error", recErr)
+		return fmt.Errorf("record: %w", recErr)
 	}
 
 	if opts.OnRecordingStop != nil {
