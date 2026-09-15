@@ -108,7 +108,11 @@ func runHint(cmd *cobra.Command, cfg *config.Config, p platform.Platform) error 
 			fmt.Fprintf(out, "provider %q: unknown, skipping\n", name)
 			continue
 		}
-		prov, err := factory(hint.Config{RootPath: rootPath})
+		prov, err := factory(hint.Config{
+			RootPath:             rootPath,
+			ExecCommand:          cfg.Hint.ExecCommand,
+			ConversationMaxBytes: cfg.Hint.ConversationMaxChars,
+		})
 		if err != nil {
 			fmt.Fprintf(out, "provider %q: construction failed: %v\n", name, err)
 			continue

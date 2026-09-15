@@ -44,7 +44,7 @@ func ValidElectronStrategies() []string {
 // pkg/yap/hint) to avoid a dependency cycle. It must be kept in
 // lockstep with the providers registered in pkg/yap/hint.
 func ValidHintProviders() []string {
-	return []string{"claudecode", "termscroll"}
+	return []string{"claudecode", "exec", "termscroll"}
 }
 
 // ValidInjectionStrategies returns the allowed values for

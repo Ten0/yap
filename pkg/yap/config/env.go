@@ -1,6 +1,11 @@
 package config
 
-import "os"
+import (
+	"os"
+	"reflect"
+	"slices"
+	"strings"
+)
 
 // Environment variable names. Exported constants so downstream
 // packages (CLI, docs generators) can reference the same source of
@@ -43,4 +48,70 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv(EnvHotkey); v != "" {
 		cfg.General.Hotkey = v
 	}
+}
+
+// SecretEnvNames returns the sorted environment variable names that
+// carry secrets into the configuration.
+//
+// It is derived by reflection from the `yap:"secret;env=..."` struct
+// tags on Config, so the schema decides: a secret field added later is
+// covered the moment it is tagged, without anyone having to remember
+// that this function exists.
+//
+// Callers that hand yap's environment to a child process — see
+// pkg/yap/hint/exec — must remove these names first. A helper program
+// has no business seeing the user's API keys.
+func SecretEnvNames() []string {
+	var names []string
+	cfgType := reflect.TypeOf(Config{})
+	for i := 0; i < cfgType.NumField(); i++ {
+		section := cfgType.Field(i).Type
+		if section.Kind() != reflect.Struct {
+			continue
+		}
+		for j := 0; j < section.NumField(); j++ {
+			for _, name := range secretEnvNamesFromTag(section.Field(j).Tag.Get("yap")) {
+				if !slices.Contains(names, name) {
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// secretEnvNamesFromTag returns the env var names declared by one
+// `yap:"..."` tag, or nil when the field is not marked secret. The
+// grammar matches internal/cmd/gen-nixos: semicolon-separated parts, a
+// bare `secret` flag, `env=` a comma-separated list, and `doc=` greedy
+// and therefore last.
+func secretEnvNamesFromTag(tag string) []string {
+	var names []string
+	secret := false
+	for rest := tag; rest != ""; {
+		if strings.HasPrefix(rest, "doc=") {
+			break
+		}
+		part := rest
+		if i := strings.IndexByte(rest, ';'); i >= 0 {
+			part, rest = rest[:i], strings.TrimSpace(rest[i+1:])
+		} else {
+			rest = ""
+		}
+		switch part = strings.TrimSpace(part); {
+		case part == "secret":
+			secret = true
+		case strings.HasPrefix(part, "env="):
+			for _, name := range strings.Split(part[len("env="):], ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	if !secret {
+		return nil
+	}
+	return names
 }
