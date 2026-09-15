@@ -297,6 +297,11 @@ in {
           default = [ "claudecode" "termscroll" ];
           description = "Ordered hint provider list for conversation context; first match wins";
         };
+        exec_command = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Command the exec provider runs to produce conversation context; empty disables it. Runs under /bin/sh with the focused window described in YAP_HINT_* environment variables, and must print one JSON object on stdout. Read only from the user's own config, never from a project's .yap.toml, so checking out a repository can never make yap run its code";
+        };
         vocabulary_max_chars = lib.mkOption {
           type = lib.types.int;
           default = 250;

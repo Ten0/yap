@@ -48,7 +48,7 @@ type TranscriptionConfig struct {
 	VADModelPath      string `toml:"vad_model_path"      yap:"doc=Explicit Silero VAD model path (whisperlocal only); empty resolves the pinned model from the cache, downloading it when absent"`
 	Language          string `toml:"language"            yap:"doc=ISO language code; empty auto-detects"`
 	APIURL            string `toml:"api_url"             yap:"doc=Remote endpoint URL; required when backend is remote"`
-	APIKey            string `toml:"api_key"             yap:"secret;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
+	APIKey            string `toml:"api_key"             yap:"secret;env=YAP_API_KEY,GROQ_API_KEY;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
 }
 
 // ResolvedAPIURL returns the URL the transcriber should POST to. For
@@ -75,7 +75,7 @@ type TransformConfig struct {
 	Model              string `toml:"model"         yap:"doc=Model name; required when enabled and backend is not passthrough"`
 	SystemPrompt       string `toml:"system_prompt" yap:"doc=System prompt for the transform backend"`
 	APIURL             string `toml:"api_url"       yap:"doc=Transform endpoint; local backends default to http://localhost:11434/v1"`
-	APIKey             string `toml:"api_key"       yap:"secret;doc=API key; env: YAP_TRANSFORM_API_KEY"`
+	APIKey             string `toml:"api_key"       yap:"secret;env=YAP_TRANSFORM_API_KEY;doc=API key; env: YAP_TRANSFORM_API_KEY"`
 	StartupHealthCheck bool   `toml:"startup_health_check" yap:"doc=Probe the backend once at startup, falling back to passthrough for the session when it fails. Disable for endpoints that serve chat completions but no usable probe endpoint, or so a backend that is unavailable only at that moment does not silently downgrade every later transform"`
 }
 
@@ -108,6 +108,7 @@ type HintConfig struct {
 	Enabled              bool     `toml:"enabled"                yap:"doc=Enable context-aware hint pipeline"`
 	VocabularyFiles      []string `toml:"vocabulary_files"       yap:"doc=Project doc filenames to read for base vocabulary (walks cwd to git root)"`
 	Providers            []string `toml:"providers"              yap:"doc=Ordered hint provider list for conversation context; first match wins"`
+	ExecCommand          string   `toml:"exec_command"           yap:"doc=Command the exec provider runs to produce conversation context; empty disables it. Runs under /bin/sh with the focused window described in YAP_HINT_* environment variables, and must print one JSON object on stdout. Read only from the user's own config, never from a project's .yap.toml, so checking out a repository can never make yap run its code"`
 	VocabularyMaxChars   int      `toml:"vocabulary_max_chars"   yap:"min=0;max=8000;doc=Max bytes of vocabulary passed to Whisper prompt"`
 	ConversationMaxChars int      `toml:"conversation_max_chars" yap:"min=0;max=32000;doc=Max bytes of conversation context passed to transform"`
 	TimeoutMS            int      `toml:"timeout_ms"             yap:"min=0;max=5000;doc=Max wall time in ms for hint provider fetch"`
@@ -188,6 +189,7 @@ func DefaultConfig() Config {
 			Enabled:              true,
 			VocabularyFiles:      []string{"CLAUDE.md", "AGENTS.md", "README.md"},
 			Providers:            []string{"claudecode", "termscroll"},
+			ExecCommand:          "",
 			VocabularyMaxChars:   250,
 			ConversationMaxChars: 8000,
 			TimeoutMS:            300,

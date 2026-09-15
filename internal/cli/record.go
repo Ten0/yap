@@ -468,7 +468,11 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		if err != nil {
 			continue
 		}
-		prov, err := factory(hint.Config{RootPath: rootPath})
+		prov, err := factory(hint.Config{
+			RootPath:             rootPath,
+			ExecCommand:          cfg.Hint.ExecCommand,
+			ConversationMaxBytes: cfg.Hint.ConversationMaxChars,
+		})
 		if err != nil {
 			continue
 		}

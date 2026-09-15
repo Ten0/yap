@@ -153,6 +153,7 @@ default_strategy = ""           # empty = auto-detect; or force "tmux"/"osc52"/"
 enabled = true                  # context-aware transcription (reads project docs + app state)
 vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project docs to read for domain terms
 providers = ["claudecode", "termscroll"]                       # conversation context providers, first-match wins
+exec_command = ""               # command whose JSON stdout supplies conversation context; empty disables
 vocabulary_max_chars = 250      # Whisper prompt budget
 conversation_max_chars = 8000   # transform context budget
 timeout_ms = 300                # max wall-time for provider fetch
@@ -197,6 +198,7 @@ yap reads project docs and application state to bias Whisper toward your domain 
 |---|---|---|
 | `claudecode` | Terminal apps | `~/.claude/projects/<cwd-slug>/<latest>.jsonl` — recent user/assistant messages |
 | `termscroll` | Terminal apps | Terminal scrollback via API (kitty `allow_remote_control`; wezterm, ghostty, tmux coming soon) |
+| `exec` | Any window, once `hint.exec_command` is set | A command you supply. yap describes the focused window in `YAP_HINT_*` environment variables; the command answers with one JSON object on stdout. Use it to reach state yap has no built-in provider for |
 
 **All `[hint]` options** (in `~/.config/yap/config.toml`):
 
@@ -205,6 +207,7 @@ yap reads project docs and application state to bias Whisper toward your domain 
 enabled = true                                              # master switch
 vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project doc filenames, walked from cwd to git root
 providers = ["claudecode", "termscroll"]                     # conversation providers, first-match wins
+exec_command = ""                                            # command whose JSON stdout supplies conversation context; empty disables
 vocabulary_max_chars = 250                                   # Whisper prompt budget
 conversation_max_chars = 8000                                # transform context budget
 timeout_ms = 300                                             # max ms for provider fetch before recording starts

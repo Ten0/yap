@@ -43,6 +43,7 @@ import (
 	_ "github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
 	// Register hint providers for context-aware pipeline (Phase 12).
 	_ "github.com/Enriquefft/yap/pkg/yap/hint/claudecode"
+	_ "github.com/Enriquefft/yap/pkg/yap/hint/exec"
 	_ "github.com/Enriquefft/yap/pkg/yap/hint/termscroll"
 )
 
@@ -955,7 +956,15 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		if fErr != nil {
 			continue
 		}
-		p, pErr := factory(hint.Config{RootPath: rootPath})
+		// ExecCommand is read from the user's own config, never from
+		// the project-override snapshot: .yap.toml ships inside a
+		// repository, and checking out a repository must not be able
+		// to choose what yap executes.
+		p, pErr := factory(hint.Config{
+			RootPath:             rootPath,
+			ExecCommand:          d.cfg.Hint.ExecCommand,
+			ConversationMaxBytes: hintCfg.ConversationMaxChars,
+		})
 		if pErr != nil {
 			continue
 		}

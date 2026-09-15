@@ -36,6 +36,17 @@ type Config struct {
 	// that need to resolve paths (e.g. Claude Code session directory)
 	// use this as the base.
 	RootPath string
+
+	// ExecCommand is the command line the "exec" provider runs to
+	// produce conversation context. Empty disables that provider.
+	// Other providers ignore it.
+	ExecCommand string
+
+	// ConversationMaxBytes is the byte budget for Bundle.Conversation.
+	// Providers that can bound their output at the source honor it so
+	// the text is never produced in the first place; the daemon
+	// truncates whatever comes back regardless. Zero means unknown.
+	ConversationMaxBytes int
 }
 
 // Provider is the interface hint providers implement. Each provider
