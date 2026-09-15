@@ -108,10 +108,9 @@ func TestDispatchUnknownCommand(t *testing.T) {
 
 // TestSetToggleFn sets the toggle function.
 func TestSetToggleFn(t *testing.T) {
-	srv, err := NewServer("/tmp/test-ipc-toggle.sock")
+	srv, err := NewServer(filepath.Join(t.TempDir(), "test.sock"))
 	require.NoError(t, err)
 	defer srv.Close()
-	defer os.Remove("/tmp/test-ipc-toggle.sock")
 
 	called := false
 	srv.SetToggleFn(func(_ string) string {
@@ -128,10 +127,9 @@ func TestSetToggleFn(t *testing.T) {
 
 // TestSetStatusFn sets the status function.
 func TestSetStatusFn(t *testing.T) {
-	srv, err := NewServer("/tmp/test-ipc-status.sock")
+	srv, err := NewServer(filepath.Join(t.TempDir(), "test.sock"))
 	require.NoError(t, err)
 	defer srv.Close()
-	defer os.Remove("/tmp/test-ipc-status.sock")
 
 	called := false
 	srv.SetStatusFn(func() Response {
