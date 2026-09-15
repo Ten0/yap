@@ -53,7 +53,9 @@
 //     its input; an output several times larger is the signature of a
 //     model answering its prompt instead of correcting it, and the
 //     user's own words are the safer thing to deliver. OnError is
-//     called with ErrImplausibleExpansion.
+//     called with an *ExpansionError, which unwraps to
+//     ErrImplausibleExpansion and carries the discarded text so a
+//     caller can record what the model said instead of repairing.
 //
 //   - If ctx is cancelled while the primary is running, ctx.Err is
 //     returned and the fallback is not invoked. Cancellation is the

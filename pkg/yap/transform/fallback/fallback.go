@@ -3,6 +3,7 @@ package fallback
 import (
 	"context"
 	"errors"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
@@ -23,6 +24,28 @@ func (e expansionError) Error() string { return string(e) }
 // answered instead of transforming".
 const ErrImplausibleExpansion = expansionError(
 	"transform: output far larger than input; treated as a reply, not a repair")
+
+// ExpansionError is the error OnError actually receives when output is
+// rejected. It carries the text that was thrown away, because that text
+// is the whole evidence of what went wrong: a caller looking at a
+// journal afterwards wants to read what the model said instead of
+// repairing, and by then it exists nowhere else.
+//
+// It unwraps to ErrImplausibleExpansion, so callers that only want to
+// classify the failure keep using errors.Is and never see this type.
+type ExpansionError struct {
+	// Dropped is the primary's output, discarded in favour of the raw
+	// input. Callers that log it should treat it as they would a
+	// transcript: it is the user's dictation refracted through a model.
+	Dropped string
+	// In and Out are the rune counts that failed the check, so a log
+	// line can carry the shape of the failure without the text.
+	In, Out int
+}
+
+func (e *ExpansionError) Error() string { return ErrImplausibleExpansion.Error() }
+
+func (e *ExpansionError) Unwrap() error { return ErrImplausibleExpansion }
 
 // Transformer is a transform.Transformer decorator that runs Primary
 // first and falls back to Fallback on failure. See the package doc
@@ -118,8 +141,13 @@ func (t *Transformer) forwardPrimary(
 				// Primary finished without error. Before committing
 				// its output, check it is plausibly a repair of the
 				// input rather than a reply to it.
-				if implausibleExpansion(runeLen(buffered), runeLen(staged)) {
-					t.runFallback(ctx, ErrImplausibleExpansion, buffered, out, opts)
+				inLen, outLen := runeLen(buffered), runeLen(staged)
+				if implausibleExpansion(inLen, outLen) {
+					t.runFallback(ctx, &ExpansionError{
+						Dropped: chunkText(staged),
+						In:      inLen,
+						Out:     outLen,
+					}, buffered, out, opts)
 					return
 				}
 				// Drain staged chunks to the caller.
@@ -182,6 +210,17 @@ func (t *Transformer) runFallback(
 			}
 		}
 	}
+}
+
+// chunkText joins a chunk slice back into the string it represents.
+// Only reached on the rejection path, so the allocation is paid once
+// per failure rather than once per recording.
+func chunkText(chunks []transcribe.TranscriptChunk) string {
+	var sb strings.Builder
+	for _, c := range chunks {
+		sb.WriteString(c.Text)
+	}
+	return sb.String()
 }
 
 // runeLen totals the text length of a chunk slice. Runes rather than

@@ -340,7 +340,7 @@ func TestNewTransformerWithFallback_NoNotifier_NoWrapping(t *testing.T) {
 		Backend: "local",
 		Model:   "llama3",
 	}
-	tr, err := NewTransformerWithFallback(tc, nil, false)
+	tr, err := NewTransformerWithFallback(tc, nil, pcfg.GeneralConfig{})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestNewTransformerWithFallback_HealthCheckSuccess_Wraps(t *testing.T) {
 		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier, false)
+	tr, err := NewTransformerWithFallback(tc, notifier, pcfg.GeneralConfig{})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestNewTransformerWithFallback_HealthCheckFailure_Notifies(t *testing.T) {
 		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier, false)
+	tr, err := NewTransformerWithFallback(tc, notifier, pcfg.GeneralConfig{})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestNewTransformerWithFallback_UnknownBackend_Errors(t *testing.T) {
 		Backend: "this-backend-does-not-exist",
 		Model:   "x",
 	}
-	_, err := NewTransformerWithFallback(tc, &countingNotifier{}, false)
+	_, err := NewTransformerWithFallback(tc, &countingNotifier{}, pcfg.GeneralConfig{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -461,7 +461,7 @@ func TestNewTransformerWithFallback_StreamPartials_NoFallbackWrapping(t *testing
 		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
+	tr, err := NewTransformerWithFallback(tc, notifier, pcfg.GeneralConfig{StreamPartials: true})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPass
 		StartupHealthCheck: true,
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
+	tr, err := NewTransformerWithFallback(tc, notifier, pcfg.GeneralConfig{StreamPartials: true})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -540,7 +540,7 @@ func TestNewTransformerWithFallback_StartupHealthCheckDisabled_NoProbe(t *testin
 		StartupHealthCheck: false,
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier, false)
+	tr, err := NewTransformerWithFallback(tc, notifier, pcfg.GeneralConfig{})
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -552,6 +552,75 @@ func TestNewTransformerWithFallback_StartupHealthCheckDisabled_NoProbe(t *testin
 	}
 	if got := atomic.LoadInt32(&notifier.calls); got != 0 {
 		t.Errorf("notifier calls = %d, want 0 when the startup probe is disabled", got)
+	}
+}
+
+// TestLogTransformFailure_DroppedTextGatedOnLogTranscripts pins the
+// contract the user asked for: when the expansion guard drops an
+// output, the journal says how big it was either way, and reproduces
+// what was dropped only if transcripts were opted into. The dropped
+// text is a transcript refracted through a model, so it follows the
+// same rule as the engine's own in/out logging rather than leaking on
+// a default.
+func TestLogTransformFailure_DroppedTextGatedOnLogTranscripts(t *testing.T) {
+	const dropped = "I'm ready to repair speech-to-text transcripts."
+	rejected := &fallback.ExpansionError{Dropped: dropped, In: 16, Out: 47}
+
+	cases := []struct {
+		name        string
+		gc          pcfg.GeneralConfig
+		err         error
+		wantLine    bool
+		wantDropped bool
+	}{
+		{
+			name:     "counts only when transcripts are off",
+			gc:       pcfg.GeneralConfig{LogTranscripts: false},
+			err:      rejected,
+			wantLine: true, wantDropped: false,
+		},
+		{
+			name:     "text included when transcripts are on",
+			gc:       pcfg.GeneralConfig{LogTranscripts: true},
+			err:      rejected,
+			wantLine: true, wantDropped: true,
+		},
+		{
+			name:     "an ordinary backend failure gets no rejection line",
+			gc:       pcfg.GeneralConfig{LogTranscripts: true},
+			err:      errors.New("connection refused"),
+			wantLine: false, wantDropped: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := newCaptureHandler()
+			prev := slog.Default()
+			slog.SetDefault(slog.New(ch))
+			defer slog.SetDefault(prev)
+
+			logTransformFailure("openai", tc.gc, tc.err)
+			got := ch.bufString()
+
+			// The generic degradation line is unconditional.
+			if !strings.Contains(got, "transform fell back to passthrough") {
+				t.Errorf("missing the fallback line; got:\n%s", got)
+			}
+			if has := strings.Contains(got, "transform output rejected"); has != tc.wantLine {
+				t.Errorf("rejection line present = %v, want %v; got:\n%s", has, tc.wantLine, got)
+			}
+			if tc.wantLine {
+				for _, want := range []string{`"in_chars":16`, `"out_chars":47`} {
+					if !strings.Contains(got, want) {
+						t.Errorf("missing %s; got:\n%s", want, got)
+					}
+				}
+			}
+			if has := strings.Contains(got, dropped); has != tc.wantDropped {
+				t.Errorf("dropped text present = %v, want %v; got:\n%s", has, tc.wantDropped, got)
+			}
+		})
 	}
 }
 

@@ -148,10 +148,9 @@ func resolvedModel(t transcribe.Transcriber, configured string) string {
 // `yap record`) should use NewTransformerWithFallback and supply a
 // live Notifier plus the user's stream_partials preference.
 func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
-	// streamPartials is irrelevant when notifier is nil — wrapping is
-	// skipped either way — so we pass false here to keep the API
-	// minimal.
-	return NewTransformerWithFallback(tc, nil, false)
+	// The general block is irrelevant when notifier is nil — wrapping
+	// is skipped either way — so the zero value keeps the API minimal.
+	return NewTransformerWithFallback(tc, nil, pcfg.GeneralConfig{})
 }
 
 // NewTransformerWithFallback builds a Transformer per the on-disk
@@ -191,7 +190,7 @@ func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 func NewTransformerWithFallback(
 	tc pcfg.TransformConfig,
 	notifier platform.Notifier,
-	streamPartials bool,
+	gc pcfg.GeneralConfig,
 ) (transform.Transformer, error) {
 	name := tc.Backend
 	if !tc.Enabled || name == "" {
@@ -221,7 +220,7 @@ func NewTransformerWithFallback(
 	// that promise. We still run the health probe so a misconfigured
 	// backend surfaces a notification and swaps to passthrough at
 	// startup time.
-	if streamPartials {
+	if gc.StreamPartials {
 		if checker, ok := primary.(transform.Checker); ok && tc.StartupHealthCheck {
 			checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := checker.HealthCheck(checkCtx)
@@ -263,8 +262,7 @@ func NewTransformerWithFallback(
 		// The toast tells whoever is at the keyboard; the log is what
 		// says so afterwards. Without this, a degraded correction is
 		// indistinguishable in the journal from one that worked.
-		slog.Default().Warn("transform fell back to passthrough",
-			"backend", name, "error", err)
+		logTransformFailure(name, gc, err)
 		notifier.Notify(
 			"yap: transform failed",
 			fmt.Sprintf("%s: %v — injected raw transcription", name, err),
@@ -274,6 +272,36 @@ func NewTransformerWithFallback(
 		return nil, err
 	}
 	return wrapped, nil
+}
+
+// logTransformFailure records a degraded transform. The toast tells
+// whoever is at the keyboard; this is what says so afterwards, because
+// otherwise a degraded correction is indistinguishable in the journal
+// from one that worked.
+//
+// A rejected output gets a second line, because it is the one failure
+// whose evidence is the text itself -- what the model said instead of
+// repairing -- and once the fallback has replaced it, it exists nowhere
+// else. The rune counts go in always; the text only when the user has
+// opted into transcripts in the log, which is the same rule the engine
+// applies to the transform's own input and output.
+func logTransformFailure(name string, gc pcfg.GeneralConfig, err error) {
+	slog.Default().Warn("transform fell back to passthrough",
+		"backend", name, "error", err)
+
+	var rejected *fallback.ExpansionError
+	if !errors.As(err, &rejected) {
+		return
+	}
+	attrs := []any{
+		"backend", name,
+		"in_chars", rejected.In,
+		"out_chars", rejected.Out,
+	}
+	if gc.LogTranscripts {
+		attrs = append(attrs, "dropped", rejected.Dropped)
+	}
+	slog.Default().Warn("transform output rejected", attrs...)
 }
 
 // transformBackendName is the backend the transform stage will use,
@@ -575,7 +603,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	transformer, err := NewTransformerWithFallback(
 		cfg.Transform,
 		deps.Platform.Notifier,
-		cfg.General.StreamPartials,
+		cfg.General,
 	)
 	if err != nil {
 		return fmt.Errorf("build transformer: %w", err)

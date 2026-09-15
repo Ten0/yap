@@ -131,7 +131,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	transformer, err := daemon.NewTransformerWithFallback(
 		eff.Transform,
 		p.Notifier,
-		eff.General.StreamPartials,
+		eff.General,
 	)
 	if err != nil {
 		return fmt.Errorf("record: build transformer: %w", err)

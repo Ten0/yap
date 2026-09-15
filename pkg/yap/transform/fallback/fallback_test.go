@@ -483,6 +483,51 @@ func TestTransform_ShortInputTolerance(t *testing.T) {
 	}
 }
 
+// TestTransform_ExpansionError_CarriesDroppedText pins the payload the
+// daemon logs. The rejected text exists nowhere else once the fallback
+// has replaced it, so OnError is the only chance to record what the
+// model said instead of repairing — and the error must still classify
+// as ErrImplausibleExpansion for callers that only want the category.
+func TestTransform_ExpansionError_CarriesDroppedText(t *testing.T) {
+	const partA = "I'm ready to repair speech-to-text transcripts. "
+	const partB = "Please provide the transcript you'd like me to fix."
+	primary := &stubTransformer{
+		emit: []transcribe.TranscriptChunk{
+			{Text: partA},
+			{Text: partB, IsFinal: true},
+		},
+	}
+	fb := &echoTransformer{}
+	var captured error
+	fbt, _ := fallback.New(primary, fb, func(err error) { captured = err })
+
+	raw := " speech to text."
+	out, err := fbt.Transform(context.Background(), inputChunks(
+		transcribe.TranscriptChunk{Text: raw, IsFinal: true},
+	), transform.Options{})
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	drain(out)
+
+	if !errors.Is(captured, fallback.ErrImplausibleExpansion) {
+		t.Fatalf("errors.Is(ErrImplausibleExpansion) = false for %v", captured)
+	}
+	var ee *fallback.ExpansionError
+	if !errors.As(captured, &ee) {
+		t.Fatalf("errors.As(*ExpansionError) = false for %v", captured)
+	}
+	if want := partA + partB; ee.Dropped != want {
+		t.Errorf("Dropped = %q, want the whole staged output %q", ee.Dropped, want)
+	}
+	if want := len([]rune(raw)); ee.In != want {
+		t.Errorf("In = %d, want %d", ee.In, want)
+	}
+	if want := len([]rune(partA + partB)); ee.Out != want {
+		t.Errorf("Out = %d, want %d", ee.Out, want)
+	}
+}
+
 // Ensure the decorator still satisfies transform.Transformer.
 func TestTransform_InterfaceSatisfied(t *testing.T) {
 	var _ transform.Transformer = (*fallback.Transformer)(nil)
