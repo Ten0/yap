@@ -47,6 +47,14 @@
 //     input. Partial success is treated as failure — we never mix
 //     transformed and raw output.
 //
+//   - If the primary succeeds but returns far more text than it was
+//     given, its output is rejected and the fallback replays the raw
+//     input. A transform repairs a transcript, so its output tracks
+//     its input; an output several times larger is the signature of a
+//     model answering its prompt instead of correcting it, and the
+//     user's own words are the safer thing to deliver. OnError is
+//     called with ErrImplausibleExpansion.
+//
 //   - If ctx is cancelled while the primary is running, ctx.Err is
 //     returned and the fallback is not invoked. Cancellation is the
 //     user's explicit stop, not a backend failure.

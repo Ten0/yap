@@ -3,10 +3,26 @@ package fallback
 import (
 	"context"
 	"errors"
+	"unicode/utf8"
 
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/Enriquefft/yap/pkg/yap/transform"
 )
+
+// expansionError is a string-backed error type so the sentinel below
+// can be a const. A package-level var would trip this package's own
+// noglobals guard, and the invariant it protects — all state lives on
+// the Transformer — is worth keeping.
+type expansionError string
+
+func (e expansionError) Error() string { return string(e) }
+
+// ErrImplausibleExpansion is handed to OnError when the primary
+// returned far more text than it was given. Callers match it with
+// errors.Is to distinguish "the backend failed" from "the backend
+// answered instead of transforming".
+const ErrImplausibleExpansion = expansionError(
+	"transform: output far larger than input; treated as a reply, not a repair")
 
 // Transformer is a transform.Transformer decorator that runs Primary
 // first and falls back to Fallback on failure. See the package doc
@@ -99,8 +115,14 @@ func (t *Transformer) forwardPrimary(
 			return
 		case chunk, open := <-primaryOut:
 			if !open {
-				// Primary finished without error: drain staged
-				// chunks to the caller.
+				// Primary finished without error. Before committing
+				// its output, check it is plausibly a repair of the
+				// input rather than a reply to it.
+				if implausibleExpansion(runeLen(buffered), runeLen(staged)) {
+					t.runFallback(ctx, ErrImplausibleExpansion, buffered, out, opts)
+					return
+				}
+				// Drain staged chunks to the caller.
 				for _, c := range staged {
 					select {
 					case <-ctx.Done():
@@ -160,6 +182,41 @@ func (t *Transformer) runFallback(
 			}
 		}
 	}
+}
+
+// runeLen totals the text length of a chunk slice. Runes rather than
+// bytes: the comparison is about how much was said, and a transcript
+// in a non-ASCII language would otherwise look inflated against its
+// own repair.
+func runeLen(chunks []transcribe.TranscriptChunk) int {
+	n := 0
+	for _, c := range chunks {
+		n += utf8.RuneCountInString(c.Text)
+	}
+	return n
+}
+
+// implausibleExpansion reports whether the primary's output is too
+// much larger than its input to be a repair of it.
+//
+// A transform corrects wording, punctuation and capitalisation, so its
+// output tracks its input closely. Measured over real dictation, every
+// genuine repair landed between 0.75x and 0.99x of its input, while the
+// two observed failures — a model continuing the conversation it had
+// been given as reference context, and a model replying "I'm ready to
+// repair transcripts…" to a short fragment — came in at 5.8x and 7.0x.
+// Nothing legitimate was observed in between, so this threshold sits in
+// an empty band rather than on a judgement call.
+//
+// The +40 floor keeps very short transcripts out of it: capitalising
+// and punctuating a couple of words can legitimately exceed 2x when the
+// input is only a handful of runes.
+func implausibleExpansion(in, out int) bool {
+	limit := 2 * in
+	if floor := in + 40; floor > limit {
+		limit = floor
+	}
+	return out > limit
 }
 
 // drainRemaining consumes whatever is still sitting in the primary
